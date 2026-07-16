@@ -1,0 +1,38 @@
+/* The extended builtin function library */
+BF: PROC OPTIONS(MAIN);
+   DCL A(5) FIXED INIT(3, 1, 4, 1, 5);
+   DCL 1 REC, 2 K CHAR(3), 2 V CHAR(4);
+
+   /* string builtins */
+   PUT LIST('LEFT   :', '[' || LEFT('AB', 6, '.') || ']');
+   PUT SKIP LIST('RIGHT  :', '[' || RIGHT('AB', 6, '.') || ']');
+   PUT SKIP LIST('CENTER :', '[' || CENTER('AB', 6, '*') || ']');
+   PUT SKIP LIST('REVERSE:', REVERSE('STRESSED'));
+   PUT SKIP LIST('SEARCH :', SEARCH('HELLO WORLD', 'OW'));
+   PUT SKIP LIST('SEARCHR:', SEARCHR('HELLO WORLD', 'OW'));
+   PUT SKIP LIST('VERIFYR:', VERIFYR('123AB45', '0123456789'));
+   PUT SKIP LIST('TALLY  :', TALLY('BANANA', 'AN'));
+   PUT SKIP LIST('TRIM   :', '[' || TRIM('**DATA**', '*', '*') || ']');
+   PUT SKIP LIST('INDEX+ :', INDEX('ABCABC', 'ABC', 2));
+   PUT SKIP LIST('BOOL XOR:', BOOL('1100'B, '1010'B, '0110'B));
+
+   /* STRING() of aggregates */
+   REC.K = 'KEY';
+   REC.V = 'VAL4';
+   PUT SKIP LIST('STRING :', '[' || STRING(REC) || ']');
+
+   /* arithmetic builtins */
+   PUT SKIP(2) LIST('DIVIDE(7,3,7,2)   =', DIVIDE(7, 3, 7, 2));
+   PUT SKIP LIST('ADD(1.05,2.9,5,2) =', ADD(1.05, 2.9, 5, 2));
+   PUT SKIP LIST('MULTIPLY(1.5,3,5,2)=', MULTIPLY(1.5, 3, 5, 2));
+   PUT SKIP LIST('ROUND(2.675,2)    =', ROUND(2.675, 2));
+   PUT SKIP LIST('SUM(A), PROD(A)   =', SUM(A), PROD(A));
+   PUT SKIP LIST('ATAN(1,1) deg     =', ATAND(1, 1));
+   PUT SKIP LIST('SINH(1)           =', SINH(1));
+   PUT SKIP LIST('ERF(1)            =', ERF(1));
+
+   /* misc */
+   PUT SKIP LIST('DATETIME len      =', LENGTH(DATETIME));
+   IF RANDOM(42) >= 0 & RANDOM < 1 THEN
+      PUT SKIP LIST('RANDOM in [0,1)   = OK');
+END BF;

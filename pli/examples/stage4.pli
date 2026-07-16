@@ -1,0 +1,74 @@
+/* Stage 4: record I/O (CONSECUTIVE + INDEXED) and the preprocessor */
+%DECLARE COPIES FIXED;
+%COPIES = 3;
+%DECLARE GREETING CHARACTER;
+%GREETING = '''compile-time constant''';   /* value includes the quotes */
+
+S4: PROC OPTIONS(MAIN);
+   %INCLUDE 'empdef';
+   DCL MASTER FILE RECORD KEYED ENV(INDEXED);
+   DCL LOG    FILE RECORD OUTPUT;
+   DCL K      CHAR(4);
+   DCL I      FIXED;
+   DCL DONE   BIT(1);
+
+   PUT LIST('preprocessor says:', GREETING);
+
+   /* unrolled by the preprocessor: */
+   %DECLARE J FIXED;
+   %DO J = 1 TO COPIES;
+   PUT SKIP LIST('unrolled line', J);
+   %END;
+
+   /* ---- INDEXED file: write, read by key, rewrite, delete ---- */
+   OPEN FILE(MASTER) UPDATE TITLE('stage4_master.dat');
+
+   EMP.ID = 'E001'; EMP.NAME = 'HOPPER';  EMP.DEPT = 'RSCH';
+   EMP.WAGE = 5000;
+   WRITE FILE(MASTER) FROM(EMP) KEYFROM(EMP.ID);
+   EMP.ID = 'E002'; EMP.NAME = 'DIJKSTRA'; EMP.DEPT = 'MATH';
+   EMP.WAGE = 4500;
+   WRITE FILE(MASTER) FROM(EMP) KEYFROM(EMP.ID);
+   EMP.ID = 'E003'; EMP.NAME = 'KNUTH';   EMP.DEPT = 'MATH';
+   EMP.WAGE = 4800;
+   WRITE FILE(MASTER) FROM(EMP) KEYFROM(EMP.ID);
+
+   READ FILE(MASTER) INTO(EMP) KEY('E002');
+   PUT SKIP(2) LIST('by key E002:', EMP.NAME, EMP.WAGE);
+
+   EMP.WAGE = 9999;
+   REWRITE FILE(MASTER) FROM(EMP) KEY('E002');
+   DELETE FILE(MASTER) KEY('E003');
+
+   /* sequential sweep with KEYTO and ON ENDFILE */
+   DONE = '0'B;
+   ON ENDFILE(MASTER) DONE = '1'B;
+   CLOSE FILE(MASTER);
+   OPEN FILE(MASTER) UPDATE TITLE('stage4_master.dat');
+   PUT SKIP LIST('sequential:');
+   DO WHILE(^DONE);
+      READ FILE(MASTER) INTO(EMP) KEYTO(K);
+      IF ^DONE THEN
+         PUT SKIP LIST(K, EMP.NAME, EMP.DEPT, EMP.WAGE);
+   END;
+   CLOSE FILE(MASTER);
+
+   /* ---- CONSECUTIVE file + stream PUT FILE ---- */
+   OPEN FILE(LOG) OUTPUT TITLE('stage4_log.dat');
+   DO I = 1 TO 2;
+      EMP.ID = 'L00' || I;
+      EMP.NAME = 'ROW' || I;
+      WRITE FILE(LOG) FROM(EMP);
+   END;
+   CLOSE FILE(LOG);
+
+   DONE = '0'B;
+   ON ENDFILE(LOG) DONE = '1'B;
+   OPEN FILE(LOG) INPUT TITLE('stage4_log.dat');
+   PUT SKIP(2) LIST('log file:');
+   DO WHILE(^DONE);
+      READ FILE(LOG) INTO(EMP);
+      IF ^DONE THEN PUT SKIP LIST(EMP.ID, EMP.NAME);
+   END;
+   CLOSE FILE(LOG);
+END S4;

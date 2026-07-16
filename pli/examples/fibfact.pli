@@ -1,0 +1,31 @@
+/* Recursion, functions, iterative DO, IF/ELSE, SELECT */
+DEMO: PROC OPTIONS(MAIN);
+   DCL I FIXED BIN(31);
+
+   PUT LIST('N', 'FACT(N)', 'FIB(N)');
+   DO I = 1 TO 10;
+      PUT SKIP LIST(I, FACT(I), FIB(I));
+   END;
+
+   PUT SKIP(2) LIST('Classifying numbers with SELECT:');
+   DO I = -2 TO 2;
+      SELECT;
+         WHEN (I < 0)  PUT SKIP LIST(I, 'negative');
+         WHEN (I = 0)  PUT SKIP LIST(I, 'zero');
+         OTHERWISE     PUT SKIP LIST(I, 'positive');
+      END;
+   END;
+
+FACT: PROC(N) RETURNS(FIXED BIN(31)) RECURSIVE;
+   DCL N FIXED BIN(31);
+   IF N <= 1 THEN RETURN(1);
+   RETURN(N * FACT(N - 1));
+END FACT;
+
+FIB: PROC(N) RETURNS(FIXED BIN(31)) RECURSIVE;
+   DCL N FIXED BIN(31);
+   IF N <= 2 THEN RETURN(1);
+   RETURN(FIB(N - 1) + FIB(N - 2));
+END FIB;
+
+END DEMO;

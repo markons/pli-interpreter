@@ -1,0 +1,55 @@
+/* Stage 1: structures, ON-conditions, label variables */
+S1: PROC OPTIONS(MAIN);
+   DCL 1 EMP,
+         2 NAME,
+           3 FIRST CHAR(10) VARYING,
+           3 LAST  CHAR(12) VARYING,
+         2 SALARY  FIXED(7),
+         2 YEARS   FIXED;
+   DCL 1 BACKUP LIKE EMP;
+   DCL WHERE LABEL;
+   DCL X FLOAT;
+
+   /* qualified and partially qualified assignment */
+   EMP.NAME.FIRST = 'GRACE';
+   EMP.LAST = 'HOPPER';          /* partial qualification */
+   EMP.SALARY = 120000;          /* SALARY alone would be ambiguous:  */
+   EMP.YEARS = 40;               /* BACKUP (LIKE EMP) also has one    */
+
+   PUT LIST('Employee:', EMP.FIRST, EMP.NAME.LAST);
+   PUT SKIP LIST('Salary:', EMP.SALARY, 'Years:', EMP.YEARS);
+
+   BACKUP = EMP;                 /* structure assignment */
+   BACKUP.SALARY = 999;
+   PUT SKIP LIST('Backup:', BACKUP.FIRST, BACKUP.SALARY,
+                 'orig still', EMP.SALARY);
+
+   /* ON-condition: catch division by zero, inspect ONCODE */
+   ON ZERODIVIDE BEGIN;
+      PUT SKIP LIST('caught ZERODIVIDE, oncode =', ONCODE);
+   END;
+   X = 100 / (EMP.YEARS - 40);   /* raises; handler runs; resume here */
+   PUT SKIP LIST('resumed after ZERODIVIDE');
+
+   /* CONVERSION with ONSOURCE */
+   ON CONVERSION
+      PUT SKIP LIST('bad digits in:', ONSOURCE);
+   X = '12X4' + 1;
+   PUT SKIP LIST('resumed after CONVERSION');
+
+   /* user condition via SIGNAL */
+   ON CONDITION(PAYDAY)
+      PUT SKIP LIST('user condition PAYDAY handled');
+   SIGNAL CONDITION(PAYDAY);
+
+   /* ON ENDFILE + GOTO out of the handler, via a LABEL variable */
+   WHERE = FINIS;
+   ON ENDFILE(SYSIN) GOTO WHERE;
+   DO WHILE('1'B);
+      GET LIST(X);
+      PUT SKIP LIST('read:', X);
+   END;
+
+FINIS:
+   PUT SKIP LIST('done.');
+END S1;

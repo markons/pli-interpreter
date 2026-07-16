@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# PLY debug/table artifacts
+parser.out
+parsetab.py
+
+# data files created by PL/I record I/O examples
+*.dat

@@ -1,0 +1,54 @@
+/* Stage 5: exact FIXED DECIMAL arithmetic, COMPLEX, multitasking */
+S5: PROC OPTIONS(MAIN);
+   DCL AMT   FIXED DEC(7,2);
+   DCL RATE  FIXED DEC(5,4);
+   DCL Z     COMPLEX;
+   DCL (E1, E2) EVENT;
+   DCL TOTAL FIXED;
+
+   /* ---- exact decimal arithmetic (no binary float fuzz) ---- */
+   AMT  = 19.99;
+   RATE = 0.0825;
+   PUT LIST('AMT          =', AMT);
+   PUT SKIP LIST('RATE         =', RATE);
+   PUT SKIP LIST('AMT * RATE   =', AMT * RATE);   /* exact: 1.649175 */
+   PUT SKIP LIST('AMT + 0.01   =', AMT + 0.01);
+   PUT SKIP LIST('7 / 2        =', 7 / 2);
+   PUT SKIP LIST('1 / 3        =', 1 / 3);
+   PUT SKIP LIST('0.1+0.2=0.3? =', 0.1 + 0.2 = 0.3);  /* '1'B: exact! */
+
+   /* SIZE is catchable */
+   ON SIZE PUT SKIP LIST('SIZE condition caught');
+   AMT = 12345.67;     /* 7 digits: fits FIXED(7,2)                 */
+   PUT SKIP LIST('AMT          =', AMT);
+   AMT = 1234567.89;   /* 9 digits into FIXED(7,2): raises SIZE     */
+
+   /* ---- COMPLEX arithmetic ---- */
+   Z = 3 + 4I;
+   PUT SKIP(2) LIST('Z            =', Z);
+   PUT SKIP LIST('Z * CONJG(Z) =', Z * CONJG(Z));
+   PUT SKIP LIST('ABS(Z)       =', ABS(Z));
+   PUT SKIP LIST('REAL, IMAG   =', REAL(Z), IMAG(Z));
+   PUT SKIP LIST('(1+2I)*(3-1I)=', (1 + 2I) * (3 - 1I));
+
+   /* ---- multitasking: two workers + WAIT ---- */
+   TOTAL = 0;
+   CALL WORKER(1, 300) EVENT(E1);
+   CALL WORKER(2, 500) EVENT(E2);
+   PUT SKIP(2) LIST('main: tasks launched');
+   WAIT(E1, E2);
+   PUT SKIP LIST('main: both complete, TOTAL =', TOTAL);
+   PUT SKIP LIST('completion(E1) =', COMPLETION(E1),
+                 'status(E1) =', STATUS(E1));
+
+WORKER: PROC(ID, N);
+   DCL (ID, N, K, S) FIXED;
+   S = 0;
+   DO K = 1 TO N;
+      S = S + K;
+   END;
+   TOTAL = TOTAL + S;
+   PUT SKIP LIST('task', ID, 'sum(1..N) =', S);
+END WORKER;
+
+END S5;

@@ -1,0 +1,13 @@
+/* GET LIST input: reads a count, then that many numbers */
+AVG: PROC OPTIONS(MAIN);
+   DCL (N, I) FIXED BIN;
+   DCL (X, SUM) FLOAT;
+
+   GET LIST(N);
+   SUM = 0;
+   DO I = 1 TO N;
+      GET LIST(X);
+      SUM = SUM + X;
+   END;
+   PUT EDIT('Count: ', N, '  Average: ', SUM / N) (A, F(3), A, F(8, 3));
+END AVG;

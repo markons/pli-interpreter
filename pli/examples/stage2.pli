@@ -1,0 +1,45 @@
+/* Stage 2: PICTURE, PUT/GET DATA, FORMAT + R(), PUT STRING, GET EDIT */
+S2: PROC OPTIONS(MAIN);
+   DCL PRICE   PIC 'ZZ,ZZ9V.99';
+   DCL BALANCE PIC '$$$,$$9V.99';
+   DCL DUE     PIC 'ZZZ9CR';
+   DCL CODE    PIC 'AA999';
+   DCL (X, Y)  FIXED;
+   DCL LINE    CHAR(60) VARYING;
+   DCL NAME    CHAR(8);
+   DCL AMT     FLOAT;
+
+   PRICE   = 1234.5;
+   BALANCE = 45.5;
+   DUE     = -25;
+   CODE    = 'AB123';
+   PUT LIST('PRICE   =', PRICE);
+   PUT SKIP LIST('BALANCE =', BALANCE);
+   PUT SKIP LIST('DUE     =', DUE);
+   PUT SKIP LIST('CODE    =', CODE);
+   PUT SKIP LIST('PRICE*2 =', PRICE * 2);   /* arithmetic on picture data */
+
+   /* FORMAT statement + remote R() format */
+   X = 7; Y = 42;
+   PUT SKIP(2) EDIT('X', X, 'Y', Y) (R(TWOCOL));
+FMTDONE:
+   /* PUT DATA: data-directed output */
+   PUT SKIP(2) DATA(X, Y, PRICE);
+
+   /* PUT STRING: build a record in memory */
+   PUT STRING(LINE) EDIT('TOTAL:', X + Y) (A, F(6));
+   PUT SKIP(2) LIST('assembled >', LINE, '<');
+
+   /* GET STRING */
+   GET STRING('11 22') LIST(X, Y);
+   PUT SKIP LIST('from string:', X, Y);
+
+   /* GET DATA and GET EDIT from SYSIN */
+   GET DATA;
+   PUT SKIP LIST('after GET DATA: X =', X, 'Y =', Y);
+   GET EDIT(NAME, AMT) (A(8), F(8, 2));
+   PUT SKIP LIST('name:', NAME, 'amount:', AMT);
+   STOP;
+
+TWOCOL: FORMAT(A(4), F(6), X(3), A(4), F(6));
+END S2;

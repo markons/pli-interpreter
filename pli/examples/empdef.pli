@@ -1,0 +1,6 @@
+/* include member: employee record layout */
+DCL 1 EMP,
+      2 ID    CHAR(4),
+      2 NAME  CHAR(12),
+      2 DEPT  CHAR(4),
+      2 WAGE  FIXED;

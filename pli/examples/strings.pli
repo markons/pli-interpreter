@@ -1,0 +1,38 @@
+/* String handling: SUBSTR (incl. pseudo-variable), INDEX, TRANSLATE,
+   VERIFY, REPEAT, ||, bit strings, DO WHILE/UNTIL, LEAVE/ITERATE */
+STRDEMO: PROC OPTIONS(MAIN);
+   DCL MSG   CHAR(30) VARYING;
+   DCL FIXED_MSG CHAR(11);
+   DCL B1    BIT(4);
+   DCL I     FIXED BIN;
+
+   MSG = 'HELLO' || ', ' || 'WORLD';
+   PUT LIST('MSG           =', MSG);
+   PUT SKIP LIST('LENGTH(MSG)   =', LENGTH(MSG));
+   PUT SKIP LIST('SUBSTR(MSG,8,5) =', SUBSTR(MSG, 8, 5));
+   PUT SKIP LIST('INDEX(MSG,''WORLD'') =', INDEX(MSG, 'WORLD'));
+
+   FIXED_MSG = MSG;                     /* truncated to CHAR(11) */
+   SUBSTR(FIXED_MSG, 1, 5) = 'HOWDY';   /* pseudo-variable */
+   PUT SKIP LIST('after SUBSTR= :', FIXED_MSG);
+
+   PUT SKIP LIST('TRANSLATE     =', TRANSLATE(MSG, 'w', 'W'));
+   PUT SKIP LIST('VERIFY        =', VERIFY('12A34', '0123456789'));
+   PUT SKIP LIST('REPEAT(''AB'',2) =', REPEAT('AB', 2));
+
+   B1 = '1010'B;
+   PUT SKIP LIST('B1            =', B1);
+   PUT SKIP LIST('B1 & ''0110''B  =', B1 & '0110'B);
+   PUT SKIP LIST('B1 | ''0110''B  =', B1 | '0110'B);
+   PUT SKIP LIST('^B1           =', ^B1);
+
+   /* DO WHILE with LEAVE and ITERATE */
+   I = 0;
+   DO WHILE('1'B);
+      I = I + 1;
+      IF I = 3 THEN ITERATE;
+      IF I > 5 THEN LEAVE;
+      PUT SKIP LIST('loop I =', I);
+   END;
+   PUT SKIP LIST('final I =', I);
+END STRDEMO;

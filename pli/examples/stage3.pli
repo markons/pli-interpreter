@@ -1,0 +1,58 @@
+/* Stage 3: BASED/POINTER linked list, CONTROLLED, DEFINED, UNSPEC */
+S3: PROC OPTIONS(MAIN);
+   DCL 1 NODE BASED(P),
+         2 VAL  FIXED,
+         2 NEXT POINTER;
+   DCL (P, HEAD, Q) POINTER;
+   DCL I FIXED;
+
+   /* build a linked list 1..5 (prepending) */
+   HEAD = NULL;
+   DO I = 1 TO 5;
+      ALLOCATE NODE;
+      P -> VAL  = I * 10;
+      P -> NEXT = HEAD;
+      HEAD = P;
+   END;
+
+   PUT LIST('list:');
+   Q = HEAD;
+   DO WHILE(Q ^= NULL);
+      PUT LIST(Q -> VAL);
+      Q = Q -> NEXT;
+   END;
+
+   /* CONTROLLED: a stack by ALLOCATE/FREE */
+   BEGIN;
+      DCL S FIXED CONTROLLED;
+      DO I = 1 TO 3;
+         ALLOCATE S;
+         S = I * 111;
+      END;
+      PUT SKIP LIST('allocation(S) =', ALLOCATION(S));
+      DO WHILE(ALLOCATION(S) > 0);
+         PUT SKIP LIST('pop:', S);
+         FREE S;
+      END;
+   END;
+
+   /* DEFINED overlay with POSITION */
+   BEGIN;
+      DCL RECORD CHAR(20) INIT('AB1234CDEFGHIJKLMNOP');
+      DCL KEY  CHAR(2) DEFINED RECORD;
+      DCL SEQ  CHAR(4) DEFINED RECORD POSITION(3);
+      PUT SKIP LIST('KEY =', KEY, 'SEQ =', SEQ);
+      SEQ = '9999';
+      PUT SKIP LIST('after SEQ=9999:', RECORD);
+   END;
+
+   /* UNSPEC */
+   BEGIN;
+      DCL N FIXED INIT(5);
+      DCL C CHAR(2) INIT('AB');
+      PUT SKIP LIST('UNSPEC(5)    =', UNSPEC(N));
+      PUT SKIP LIST('UNSPEC("AB") =', UNSPEC(C));
+      UNSPEC(N) = '00000000000000000000000000001010'B;
+      PUT SKIP LIST('after UNSPEC(N)=1010B: N =', N);
+   END;
+END S3;

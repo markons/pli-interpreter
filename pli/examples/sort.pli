@@ -1,0 +1,49 @@
+/* Arrays, by-reference CALL, nested loops, PUT EDIT, GOTO */
+SORTDEMO: PROC OPTIONS(MAIN);
+   DCL A(10) FIXED BIN INIT(42, 17, 93, 8, 55, 21, 70, 3, 66, 29);
+   DCL I FIXED BIN;
+   DCL TOTAL FIXED BIN;
+
+   PUT LIST('Before:');
+   PUT SKIP;
+   DO I = 1 TO HBOUND(A);
+      PUT EDIT(A(I)) (F(5));
+   END;
+
+   CALL BUBBLE(A);
+
+   PUT SKIP(2) LIST('After:');
+   PUT SKIP;
+   DO I = 1 TO HBOUND(A);
+      PUT EDIT(A(I)) (F(5));
+   END;
+
+   TOTAL = 0;
+   DO I = 1 TO HBOUND(A);
+      TOTAL = TOTAL + A(I);
+   END;
+   PUT SKIP(2) EDIT('Sum = ', TOTAL, '   Mean = ', TOTAL / HBOUND(A))
+              (A, F(4), A, F(7, 2));
+
+   /* a little GOTO demo */
+   I = 0;
+AGAIN:
+   I = I + 1;
+   IF I < 3 THEN GOTO AGAIN;
+   PUT SKIP LIST('GOTO loop ran', I, 'times');
+
+BUBBLE: PROC(V);
+   DCL V(*) FIXED BIN;
+   DCL (I, J, T) FIXED BIN;
+   DO I = 1 TO HBOUND(V) - 1;
+      DO J = 1 TO HBOUND(V) - I;
+         IF V(J) > V(J + 1) THEN DO;
+            T = V(J);
+            V(J) = V(J + 1);
+            V(J + 1) = T;
+         END;
+      END;
+   END;
+END BUBBLE;
+
+END SORTDEMO;
