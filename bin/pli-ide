@@ -1,0 +1,6 @@
+#!/bin/sh
+# PL/I IDE launcher (Unix): bin/pli-ide [program.pli]
+# Requires Tk (on minimal distros: sudo apt install python3-tk).
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PY="$(command -v python3 || command -v python)"
+exec "$PY" "$DIR/pli_ide.py" "$@"

@@ -27,6 +27,14 @@ On Windows, `pli.bat` does the same from any directory:
 pli.bat myprog.pli
 ```
 
+On Linux/macOS use the `bin/` launchers (add `bin/` to your `PATH`
+for plain `pli myprog.pli`):
+
+```
+bin/pli myprog.pli
+bin/pli-ide myprog.pli
+```
+
 Programmatic API:
 
 ```python
@@ -158,3 +166,4 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 | `pli/examples/` | demo programs |
 | `pli_ide.py` | Tkinter IDE (edit / compile / run) |
 | `pli.bat`, `pli-ide.bat` | Windows launchers |
+| `bin/pli`, `bin/pli-ide` | Unix (Linux/macOS) launchers |
