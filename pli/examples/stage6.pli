@@ -1,0 +1,38 @@
+/* v0.3.0 features: arrays of structures, INITIAL iteration factors,
+   format-list repetition, multiple-closure END                      */
+S6: PROC OPTIONS(MAIN);
+   /* array of structures with distributed INITIAL lists */
+   DCL 1 EMP(4),
+         2 NAME  CHAR(8) VARYING INIT('ADA', 'GRACE', 'EDSGER', 'DON'),
+         2 DEPT  CHAR(4)         INIT((2)'MATH', (2)'CS'),
+         2 SALARY FIXED DEC(7,2) INIT((4)1000.50);
+   DCL (I, J) FIXED;
+   DCL TOTAL FIXED DEC(9,2) INIT(0);
+
+   /* element access, member views, aggregate ops */
+   EMP(3).SALARY = 2500.75;
+   SALARY(4) = 3000.25;            /* unqualified distributed subscript */
+
+   PUT EDIT('NAME', 'DEPT', 'SALARY') (A(10), A(6), A(9));
+   DO I = 1 TO HBOUND(EMP);
+      PUT SKIP EDIT(EMP(I).NAME, EMP(I).DEPT, EMP(I).SALARY)
+                   (A(10), A(6), F(9, 2));
+      TOTAL = TOTAL + EMP(I).SALARY;
+   END;
+   PUT SKIP EDIT('TOTAL', TOTAL) (A(16), F(9, 2));
+
+   /* format repetition: counted item and counted group */
+   PUT SKIP(2) EDIT(1, 2, 3, 4, 5, 6) ((6) F(3));
+   PUT SKIP EDIT('A', 1, 'B', 2, 'C', 3) (3 (A(2), F(2), X(2)));
+
+   /* multiple closure: one END closes both loops and the IF-group */
+   PUT SKIP(2) LIST('multiplication pairs:');
+OUTER:
+   DO I = 1 TO 3;
+      DO J = 1 TO 3;
+         IF J >= I THEN DO;
+            PUT SKIP EDIT(I, ' x ', J, ' = ', I * J)
+                         (F(2), A, F(2), A, F(3));
+END OUTER;
+   PUT SKIP LIST('done.');
+END S6;

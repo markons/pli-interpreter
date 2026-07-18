@@ -36,6 +36,90 @@ KNOWN_ATTRIBUTES = {
 }
 
 
+class MultiCloseLexer:
+    """Token filter implementing PL/I multiple closure: a labeled
+    'END X;' closes every group (DO/BEGIN/SELECT/PROC) opened since the
+    group labeled X, by injecting synthetic 'END ;' token pairs.  This
+    cannot be expressed in an LALR grammar, so - like the real
+    compilers - it happens between the lexer and the parser."""
+
+    OPENERS = ("DO", "BEGIN", "SELECT", "PROC")
+
+    def __init__(self, lexer):
+        self.lexer = lexer
+
+    def input(self, data):
+        self.lexer.input(data)
+        self.queue = []            # tokens ready to hand to the parser
+        self.pushback = []         # raw lookahead
+        self.stack = []            # per open group: set of its labels
+        self.pending = []          # labels seen since last ';'
+
+    def _raw(self):
+        if self.pushback:
+            return self.pushback.pop()
+        return self.lexer.token()
+
+    def _synth(self, ttype, value, lineno):
+        import ply.lex as lex
+        t = lex.LexToken()
+        t.type, t.value, t.lineno, t.lexpos = ttype, value, lineno, 0
+        return t
+
+    def token(self):
+        if self.queue:
+            return self.queue.pop(0)
+        t = self._raw()
+        if t is None:
+            return None
+        ttype = t.type
+        if ttype == "ID":
+            nxt = self._raw()
+            if nxt is not None and nxt.type == "COLON":
+                self.pending.append(t.value)
+            if nxt is not None:
+                self.pushback.append(nxt)
+            return t
+        if ttype in self.OPENERS:
+            self.stack.append(set(self.pending))
+            return t
+        if ttype in ("SEMI", "EXECSQL"):
+            self.pending = []
+            return t
+        if ttype == "END":
+            t2 = self._raw()
+            if t2 is not None and t2.type == "ID":
+                t3 = self._raw()
+                if t3 is not None and t3.type == "SEMI":
+                    label = t2.value
+                    depth = None
+                    for d in range(len(self.stack) - 1, -1, -1):
+                        if label in self.stack[d]:
+                            depth = d
+                            break
+                    extra = (len(self.stack) - 1 - depth) \
+                        if depth is not None else 0
+                    del self.stack[depth if depth is not None
+                                   else max(len(self.stack) - 1, 0):]
+                    for _ in range(extra):
+                        self.queue.append(self._synth("END", "END",
+                                                      t.lineno))
+                        self.queue.append(self._synth("SEMI", ";",
+                                                      t.lineno))
+                    self.queue.extend([t, t2, t3])
+                    self.pending = []
+                    return self.queue.pop(0)
+                if t3 is not None:
+                    self.pushback.append(t3)
+                self.pushback.append(t2)
+            elif t2 is not None:
+                self.pushback.append(t2)
+            if self.stack:
+                self.stack.pop()
+            return t
+        return t
+
+
 class PLIParser:
     tokens = tokens
 
@@ -358,8 +442,39 @@ class PLIParser:
         p[0] = (p.slice[1].type, None)
 
     def p_attr_init(self, p):
-        "attr : INITKW LPAREN expr_list RPAREN"
+        "attr : INITKW LPAREN init_list RPAREN"
         p[0] = ("INIT", p[3])
+
+    def p_init_list(self, p):
+        """init_list : init_list COMMA init_item
+                     | init_item"""
+        p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
+
+    def p_init_item_plain(self, p):
+        "init_item : expr"
+        p[0] = ("VAL", p[1])
+
+    def p_init_item_rep(self, p):
+        """init_item : LPAREN expr RPAREN init_val
+                     | LPAREN expr RPAREN STAR"""
+        val = None if p[4] == "*" else p[4]      # (n)* = skip n elements
+        p[0] = ("REP", p[2], val)
+
+    def p_init_val(self, p):
+        """init_val : NUMBER
+                    | MINUS NUMBER
+                    | PLUS NUMBER
+                    | STRING
+                    | BITSTRING"""
+        if len(p) == 3:
+            v = -p[2] if p[1] == "-" else p[2]
+            p[0] = N.Num(v, lineno=p.lineno(1))
+        elif p.slice[1].type == "NUMBER":
+            p[0] = N.Num(p[1], lineno=p.lineno(1))
+        elif p.slice[1].type == "STRING":
+            p[0] = N.Str(p[1], lineno=p.lineno(1))
+        else:
+            p[0] = N.Bits(p[1], lineno=p.lineno(1))
 
     def p_attr_like(self, p):
         "attr : LIKE ref"
@@ -505,6 +620,20 @@ class PLIParser:
         """format_list : format_list COMMA format_item
                        | format_item"""
         p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
+
+    def p_format_item_rep(self, p):
+        """format_item : NUMBER format_item
+                       | NUMBER LPAREN format_list RPAREN
+                       | LPAREN expr RPAREN format_item
+                       | LPAREN expr RPAREN LPAREN format_list RPAREN"""
+        if p.slice[1].type == "NUMBER":
+            count = N.Num(p[1], lineno=p.lineno(1))
+            sub = p[2] if len(p) == 3 else p[3]
+        else:
+            count = p[2]
+            sub = p[4] if len(p) == 5 else p[6]
+        items = sub if isinstance(sub, list) else [sub]
+        p[0] = N.FormatItem("REP", [count, items])
 
     def p_format_item_pic(self, p):
         "format_item : ID STRING"
@@ -743,7 +872,9 @@ class PLIParser:
             self.build()
         self.errors = []
         self.lexer_obj.lexer.lineno = 1
-        result = self.parser.parse(text, lexer=self.lexer_obj.lexer)
+        result = self.parser.parse(text,
+                                   lexer=MultiCloseLexer(
+                                       self.lexer_obj.lexer))
         if self.errors:
             if len(self.errors) >= MAX_ERRORS:
                 self.errors.append("(further errors suppressed)")

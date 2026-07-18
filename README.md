@@ -72,7 +72,12 @@ character pictures `A X 9`), `COMPLEX` (with `3+4I` constants),
 `POINTER`, `LABEL`, `EVENT`, arrays with arbitrary bounds and `(*)`
 parameters, **structures** with level numbers, `LIKE`, qualified and
 partially qualified names, structure assignment and by-reference
-structure arguments. Implicit declaration follows the I–N rule.
+structure arguments, **arrays of structures** (`DCL 1 T(10), 2 ...`)
+with element access `T(I).M`, distributed subscripts `T.M(I)` / `M(I)`,
+and aggregate assignment. `INITIAL` supports iteration factors:
+`INIT((10)0, (5)'AB', (3)*)` — `(n)*` skips n elements; in arrays of
+structures the INITIAL list distributes across elements (PL/I rule).
+Implicit declaration follows the I–N rule.
 
 **Exact fixed-point arithmetic** — decimal literals are exact
 `FIXED DECIMAL` values; `+ - * /` follow the PL/I F result-precision
@@ -91,7 +96,8 @@ representations).
 **Flow control** — `IF`/`THEN`/`ELSE`, all `DO` forms (groups, `WHILE`,
 `UNTIL`, iterative with multiple specifications), `SELECT`/`WHEN`/
 `OTHERWISE`, `GOTO` (incl. out of procedures and through LABEL
-variables), `LEAVE`/`ITERATE`, `STOP`.
+variables), `LEAVE`/`ITERATE`, `STOP`, and **multiple closure**: a
+labeled `END X;` closes every group opened since the group labeled `X`.
 
 **ON-conditions** — `ON cond [SNAP] unit | SYSTEM`, `SIGNAL`, `REVERT`,
 `ONCODE`/`ONCHAR`/`ONSOURCE`, user conditions via `CONDITION(name)`.
@@ -101,9 +107,10 @@ Raised: `ZERODIVIDE`, `FIXEDOVERFLOW`, `SIZE`, `CONVERSION`,
 after the interrupted statement.
 
 **Stream I/O** — `PUT`/`GET` `LIST`, `EDIT` (formats `A B F E X COL SKIP
-P'...'` and remote `R(label)` with `FORMAT` statements), `DATA`
-(data-directed, both directions), `STRING`, `FILE(f)`, `SKIP(n)`,
-`PAGE`; SYSPRINT tab stops.
+P'...'`, remote `R(label)` with `FORMAT` statements, and repetition
+factors: `(3) F(5)`, `2 (A(2), X(1))`, nested), `DATA` (data-directed,
+both directions), `STRING`, `FILE(f)`, `SKIP(n)`, `PAGE`; SYSPRINT tab
+stops.
 
 **Record I/O** — `DCL f FILE RECORD [KEYED] ENV(INDEXED)`, `OPEN`
 (`TITLE`, mode), `CLOSE`, `READ INTO [KEY|KEYTO]`, `WRITE FROM
@@ -195,9 +202,9 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 - BASED/pointer storage uses object references, not byte-addressable
   storage; `P->X` reinterprets the pointed-to object, not raw bytes.
 - Integer/integer division is not scale-preserving (see above).
-- Arrays of structures, `BY NAME` assignment, iSUB defining, AREA/
-  OFFSET, `DO REPEAT`, REGIONAL files, GENERIC entries, and `%GOTO`
-  backward jumps are not implemented.
+- `BY NAME` assignment, iSUB defining, AREA/OFFSET, `DO REPEAT`,
+  REGIONAL files, GENERIC entries, array cross-sections (`A(*,2)`),
+  and `%GOTO` backward jumps are not implemented.
 - ON-unit resumption is at statement granularity; PUT LIST tab stops
   are fixed at 24 columns.
 

@@ -192,6 +192,58 @@ class PLIArray:
         self.data[self._offset(subs)] = convert(value, self.decl)
 
 
+class PLIStructArray:
+    """An array of structures: DCL 1 T(10), 2 A ..., 2 B ...;"""
+    def __init__(self, name, bounds):
+        self.name = name
+        self.bounds = bounds      # [(lo, hi), ...]
+        self.data = []            # flat list of PLIStructure elements
+
+    def _offset(self, subs):
+        if len(subs) != len(self.bounds):
+            raise PLIError("wrong number of subscripts (%d for %d)"
+                           % (len(subs), len(self.bounds)))
+        off = 0
+        for (lo, hi), s in zip(self.bounds, subs):
+            i = int(to_number(s))
+            if i < lo or i > hi:
+                raise PLICondition("SUBSCRIPTRANGE",
+                                   "subscript %d out of range %d:%d"
+                                   % (i, lo, hi))
+            off = off * (hi - lo + 1) + (i - lo)
+        return off
+
+    def get(self, subs):
+        return self.data[self._offset(subs)]
+
+    def find_member(self, name):
+        return self.data[0].find(name) if self.data else None
+
+    def leaves(self):
+        for e in self.data:
+            yield from e.leaves()
+
+    def leaf_values(self):
+        for e in self.data:
+            yield from e.leaf_values()
+
+
+class StructMemberView:
+    """Distributed-subscript view: K(I) or T.K(I) where K is a member
+    of the array of structures T - the subscript selects the element."""
+    def __init__(self, sarr, name):
+        self.sarr = sarr
+        self.name = name
+
+    def member(self, subs):
+        elem = self.sarr.get(subs)
+        m = elem.members.get(self.name) or elem.find(self.name)
+        if m is None:
+            raise PLIError("%s has no member %s"
+                           % (self.sarr.name, self.name))
+        return m
+
+
 class Procedure:
     def __init__(self, name, node, env):
         self.name = name
@@ -817,9 +869,25 @@ class Interpreter:
             # redeclaring a parameter: just retype the shared box
             existing.decl = decl
             if init is not None:
-                existing.value = convert(self.eval(init[0], env), decl)
+                vals = self._expand_init(init, env)
+                if vals and vals[0] is not None:
+                    existing.value = convert(self.eval(vals[0], env), decl)
             return
         env.declare(name, self._make_entry(name, item, env))
+
+    def _expand_init(self, items, env):
+        """Expand an INITIAL list with iteration factors into a flat
+        list of value expressions (None = skip / leave default)."""
+        out = []
+        for it in items:
+            if isinstance(it, tuple) and it[0] == "REP":
+                n = int(to_number(self.eval(it[1], env)))
+                out.extend([it[2]] * max(n, 0))
+            elif isinstance(it, tuple):
+                out.append(it[1])
+            else:
+                out.append(it)            # pre-0.3 plain expression
+        return out
 
     def _make_entry(self, name, item, env):
         decl = self._resolve_attrs(name, item.attrs, env)
@@ -834,13 +902,16 @@ class Interpreter:
                 bounds.append((lo, hi))
             arr = PLIArray(bounds, decl)
             if init is not None:
-                vals = [convert(self.eval(e, env), decl) for e in init]
+                vals = self._expand_init(init, env)
                 for i in range(min(len(vals), len(arr.data))):
-                    arr.data[i] = vals[i]
+                    if vals[i] is not None:
+                        arr.data[i] = convert(self.eval(vals[i], env), decl)
             return arr
         value = default_value(decl)
         if init is not None:
-            value = convert(self.eval(init[0], env), decl)
+            vals = self._expand_init(init, env)
+            if vals and vals[0] is not None:
+                value = convert(self.eval(vals[0], env), decl)
         return Variable(value, decl)
 
     # -- structures -------------------------------------------------------
@@ -856,11 +927,11 @@ class Interpreter:
             ctl.subitems = subitems
             env.declare(name, ctl)
             return
-        if isinstance(env.vars.get(name), PLIStructure):
+        if isinstance(env.vars.get(name), (PLIStructure, PLIStructArray)):
             return  # structure parameter: keep the caller's structure
         if root.dims is not None:
-            raise PLIError("line %d: arrays of structures are not supported"
-                           % root.lineno)
+            self._declare_struct_array(name, root, subitems, env)
+            return
         like = next((v for k, v in root.attrs if k == "LIKE"), None)
         if like is not None:
             tmpl = self._lookup_structure(like, env)
@@ -873,6 +944,61 @@ class Interpreter:
             struct.spec = (root.level, subitems)
             self._build_members(struct, subitems, 0, root.level, env)
         env.declare(name, struct)
+
+    def _declare_struct_array(self, name, root, subitems, env):
+        bounds = []
+        for b in root.dims:
+            if b == ("*",):
+                raise PLIError("'*' bounds only valid for parameters")
+            lo = 1 if b[0] is None else int(to_number(self.eval(b[0], env)))
+            hi = int(to_number(self.eval(b[1], env)))
+            bounds.append((lo, hi))
+        n = 1
+        for lo, hi in bounds:
+            n *= (hi - lo + 1)
+        # build elements with INITIAL stripped; INITIAL lists distribute
+        # across elements afterwards (PL/I rule)
+        stripped = [N.DeclItem(it.names, it.dims,
+                               [a for a in it.attrs if a[0] != "INIT"],
+                               it.level, lineno=it.lineno)
+                    for it in subitems]
+        sa = PLIStructArray(name, bounds)
+        for _ in range(n):
+            s = PLIStructure(name)
+            s.spec = (root.level, stripped)
+            self._build_members(s, stripped, 0, root.level, env)
+            sa.data.append(s)
+        # leaf INITIAL lists, in leaf order
+        leaf_inits = []
+        for k, it in enumerate(subitems):
+            is_node = (k + 1 < len(subitems)
+                       and subitems[k + 1].level > it.level)
+            if not is_node:
+                leaf_inits.append(next((v for a, v in it.attrs
+                                        if a == "INIT"), None))
+        for li, init in enumerate(leaf_inits):
+            if init is None:
+                continue
+            vals = self._expand_init(init, env)
+            vi = 0
+            for elem in sa.data:
+                if vi >= len(vals):
+                    break
+                leaf = list(elem.leaves())[li]
+                if isinstance(leaf, PLIArray):
+                    for si in range(len(leaf.data)):
+                        if vi >= len(vals):
+                            break
+                        if vals[vi] is not None:
+                            leaf.data[si] = convert(
+                                self.eval(vals[vi], env), leaf.decl)
+                        vi += 1
+                else:
+                    if vals[vi] is not None:
+                        leaf.value = convert(self.eval(vals[vi], env),
+                                             leaf.decl)
+                    vi += 1
+        env.declare(name, sa)
 
     def _build_members(self, parent, items, i, parent_level, env):
         while i < len(items) and items[i].level > parent_level:
@@ -917,6 +1043,9 @@ class Interpreter:
                     hit = entry.find(name)
                     if hit is not None:
                         hits.append(hit)
+                elif isinstance(entry, PLIStructArray):
+                    if entry.find_member(name) is not None:
+                        hits.append(StructMemberView(entry, name))
             if hits:          # innermost scope with a hit wins
                 break
             e = e.parent
@@ -1042,10 +1171,48 @@ class Interpreter:
         if isinstance(entry, PLIStructure):
             self._assign_structure(entry, value)
             return
+        if isinstance(entry, PLIStructArray):
+            if args is not None:
+                subs = [self.eval(a, env) for a in args]
+                self._assign_structure(entry.get(subs), value)
+                return
+            self._assign_struct_array(entry, value)
+            return
+        if isinstance(entry, StructMemberView):
+            if args is None:
+                raise PLIError("line %d: %s needs subscripts"
+                               % (ref.lineno, ref.name))
+            subs = [self.eval(a, env) for a in args]
+            m = entry.member(subs)
+            if isinstance(m, Variable):
+                m.value = convert(value, m.decl)
+            elif isinstance(m, PLIStructure):
+                self._assign_structure(m, value)
+            else:
+                self._assign_array(m, value)
+            return
         raise PLIError("line %d: cannot assign to %s" % (ref.lineno, ref.name))
 
+    def _assign_struct_array(self, sa, value):
+        if isinstance(value, PLIStructArray):
+            if len(value.data) != len(sa.data):
+                raise PLIError("structure array assignment: extent "
+                               "mismatch")
+            for d, s in zip(sa.data, value.data):
+                self._assign_structure(d, s)
+        else:
+            for elem in sa.data:
+                self._assign_structure(elem, value)
+
     def assign_member(self, node, value, env):
-        base = self._eval_structure(node.base, env)
+        base = self.eval(node.base, env)
+        if isinstance(base, PLIStructArray):
+            view = StructMemberView(base, node.name)
+            self._assign_entry(view, node.args, value, node, env)
+            return
+        if not isinstance(base, PLIStructure):
+            raise PLIError("line %d: qualified reference on a "
+                           "non-structure" % node.lineno)
         entry = base.members.get(node.name)
         if entry is None:
             entry = base.find(node.name)
@@ -1182,7 +1349,8 @@ class Interpreter:
         if isinstance(arg, N.Ref):
             entry = env.lookup(arg.name)
             if arg.args is None and isinstance(
-                    entry, (Variable, PLIArray, PLIStructure)):
+                    entry, (Variable, PLIArray, PLIStructure,
+                            PLIStructArray)):
                 return entry                     # by reference
         if isinstance(arg, N.Member) and arg.args is None:
             base = self._eval_structure(arg.base, env)
@@ -1412,7 +1580,7 @@ class Interpreter:
             elif kind == "LIST":
                 for e in clause[1]:
                     v = self.eval(e, env)
-                    if isinstance(v, PLIStructure):
+                    if isinstance(v, (PLIStructure, PLIStructArray)):
                         values = list(v.leaf_values())
                     elif isinstance(v, PLIArray):
                         values = list(v.data)
@@ -1485,6 +1653,11 @@ class Interpreter:
         elif isinstance(entry, PLIStructure):
             for mname, m in entry.members.items():
                 self._collect_data("%s.%s" % (name, mname), m, pairs)
+        elif isinstance(entry, PLIStructArray):
+            for idx, elem in zip(self._all_subscripts(entry), entry.data):
+                self._collect_data("%s(%s)" % (name,
+                                               ",".join(map(str, idx))),
+                                   elem, pairs)
 
     @staticmethod
     def _all_subscripts(arr):
@@ -1516,7 +1689,11 @@ class Interpreter:
             raise PLIError("R format items nested too deeply")
         out = []
         for f in formats:
-            if f.name.upper() == "R" and f.args:
+            if f.name == "REP":
+                n = int(to_number(self.eval(f.args[0], env)))
+                expansion = self._expand_formats(f.args[1], env, depth + 1)
+                out.extend(expansion * max(n, 0))
+            elif f.name.upper() == "R" and f.args:
                 ref = f.args[0]
                 fd = env.lookup(ref.name) if isinstance(ref, N.Ref) else None
                 if not isinstance(fd, FormatDef):
@@ -1826,6 +2003,20 @@ class Interpreter:
                 raise PLIError("line %d: %s is a structure, not an array"
                                % (node.lineno, node.name))
             return entry
+        if isinstance(entry, PLIStructArray):
+            if node.args is None:
+                return entry                 # aggregate reference
+            subs = [self.eval(a, env) for a in node.args]
+            return entry.get(subs)
+        if isinstance(entry, StructMemberView):
+            if node.args is None:
+                raise PLIError("line %d: %s needs subscripts"
+                               % (node.lineno, node.name))
+            subs = [self.eval(a, env) for a in node.args]
+            m = entry.member(subs)
+            if isinstance(m, Variable):
+                return m.value
+            return m
         raise PLIError("line %d: cannot evaluate %s" % (node.lineno, node.name))
 
     # -- based / controlled / defined storage --------------------------------
@@ -2153,7 +2344,14 @@ class Interpreter:
         self.assign_target(ref, record, env)
 
     def eval_Member(self, node, env):
-        base = self._eval_structure(node.base, env)
+        base = self.eval(node.base, env)
+        if isinstance(base, PLIStructArray):
+            # distributed subscript: T.K(2) selects element 2's K
+            view = StructMemberView(base, node.name)
+            return self._eval_entry(view, node, env)
+        if not isinstance(base, PLIStructure):
+            raise PLIError("line %d: qualified reference on a "
+                           "non-structure" % node.lineno)
         entry = base.members.get(node.name)
         if entry is None:
             entry = base.find(node.name)
@@ -2420,7 +2618,7 @@ def builtin_dispatch(interp, name, args, node, env):
         if not isinstance(ref, N.Ref):
             raise PLIError("%s requires an array argument" % name)
         arr = env.lookup(ref.name)
-        if not isinstance(arr, PLIArray):
+        if not isinstance(arr, (PLIArray, PLIStructArray)):
             raise PLIError("%s: %s is not an array" % (name, ref.name))
         dim = int(to_number(interp.eval(node.args[1], env))) \
             if len(node.args) > 1 else 1

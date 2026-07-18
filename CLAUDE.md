@@ -52,8 +52,15 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   value must itself contain quotes.
 - `sql.py` EXEC SQL runtime — see SQL section.
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
-  byte overlay; UNSPEC works per-scalar via struct. Arrays of
-  structures, BY NAME, DO REPEAT, REGIONAL files: unsupported.
+  byte overlay; UNSPEC works per-scalar via struct. BY NAME,
+  DO REPEAT, REGIONAL files, cross-sections A(*,2): unsupported.
+- v0.3.0 additions: arrays of structures (PLIStructArray +
+  StructMemberView for T.M(I)/M(I) distributed subscripts; INITIAL
+  distributes across elements), INIT iteration factors ((10)0, (n)*
+  skips), format repetition ((3)F(5), n(...), nested; expands in
+  _expand_formats), multiple-closure END via MultiCloseLexer token
+  filter in parser.py (injects synthetic END; tokens — can't be done
+  in LALR; wraps the lexer in PLIParser.parse).
 
 ## Embedded SQL (pli/sql.py)
 - Connections in `pli_dbc.json` (searched: program dir, cwd, ~).
