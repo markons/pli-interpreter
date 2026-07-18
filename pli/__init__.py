@@ -3,6 +3,7 @@
 Usage:
     python -m pli program.pli
 """
+__version__ = "0.2.0"
 from .lexer import Lexer, Token, LexError
 from .parser import Parser, ParseError
 from .interpreter import Interpreter, PLIError, run_file, run_source

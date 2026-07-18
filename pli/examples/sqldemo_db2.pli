@@ -1,6 +1,6 @@
-/* Embedded SQL: EXEC SQL against the TESTDB (sqlite) connection
-   defined in pli_dbc.json -- runs offline.  See sqldemo_db2.pli
-   for the same demo against a real Db2.                            */
+/* Embedded SQL against a real Db2: the SAMPLE connection in
+   pli_dbc.json (jdbc:db2://...).  Prompts for the password at
+   CONNECT.  Creates/drops its own small TESTEMP table only.        */
 SQLDEMO: PROC OPTIONS(MAIN);
    DCL EMPID   FIXED;
    DCL EMPNAME CHAR(12) VARYING;
@@ -11,7 +11,7 @@ SQLDEMO: PROC OPTIONS(MAIN);
    EXEC SQL INCLUDE SQLCA;
    EXEC SQL WHENEVER SQLERROR GOTO SQLFAIL;
 
-   EXEC SQL CONNECT TO TESTDB;
+   EXEC SQL CONNECT TO SAMPLE;
    PUT LIST('connected, sqlcode =', SQLCODE);
 
    EXEC SQL DROP TABLE IF EXISTS testEMP;

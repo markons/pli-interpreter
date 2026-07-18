@@ -119,16 +119,34 @@ values in program text.
 **Multitasking** — `CALL p(...) EVENT(E)` runs the procedure on a
 thread; `WAIT(E1, E2 [, ...]) [(n)]`, `COMPLETION()`, `STATUS()`.
 
-**Embedded SQL** — `EXEC SQL ... ;` in the style of IBM's precompiler:
-`CONNECT TO name` / `CONNECT RESET` / `SET CONNECTION`, singleton
-`SELECT ... INTO :var`, `INSERT`/`UPDATE`/`DELETE`/DDL with `:HOST`
-variables (incl. `:STRUCT.MEMBER`), cursors (`DECLARE c CURSOR FOR` /
-`OPEN` / `FETCH ... INTO` / `CLOSE`), `COMMIT`/`ROLLBACK`,
-`WHENEVER SQLERROR|SQLWARNING|NOT FOUND CONTINUE|GOTO l|STOP`, and
-`INCLUDE SQLCA` (no-op).  `SQLCODE`, `SQLSTATE` and `SQLERRM` are set
-after every statement (0 / 100 / negative).  Connections are defined in
-`pli_dbc.json` (searched next to the program, in the current directory,
-then in `~`):
+## Embedded SQL
+
+`EXEC SQL ... ;` in the style of IBM's PL/I precompiler.  The SQL text
+is captured opaquely at the lexer (quote-aware), so the PL/I grammar
+never parses SQL.  Host variables `:NAME` and `:STRUCT.MEMBER` may
+appear anywhere outside SQL string literals and are passed as bound
+parameters; values fetched INTO host variables go through the normal
+PL/I conversions (Db2 `DECIMAL` round-trips as exact `FIXED DECIMAL`).
+
+Statements handled by the precompiler layer itself:
+
+| Area | Statements |
+| --- | --- |
+| Connections | `CONNECT TO name`, `CONNECT RESET`, `SET CONNECTION name` (several connections, one current) |
+| Singleton query | `SELECT ... INTO :v, ...` — `SQLCODE` +100 no row, −811 more than one |
+| Cursors | `DECLARE c CURSOR [WITH HOLD] FOR sel`, `OPEN c`, `FETCH [FROM] c INTO :v,...` (+100 at end), `CLOSE c` |
+| Transactions | `COMMIT [WORK]`, `ROLLBACK [WORK]`; commit on normal program end, rollback on abnormal end |
+| Error handling | `WHENEVER SQLERROR\|SQLWARNING\|NOT FOUND  CONTINUE\|GOTO label\|STOP` |
+| Compatibility | `INCLUDE SQLCA` (accepted no-op) |
+
+Everything else — `INSERT`, `UPDATE`, `DELETE` (+100 when no rows hit),
+`CREATE`/`DROP`/`ALTER`, `MERGE`, ... — passes through **verbatim**
+after host-variable substitution, so the SQL dialect is whatever the
+connected database accepts.  `SQLCODE`, `SQLSTATE` and `SQLERRM` are
+set after every statement (0 ok / 100 not found / negative error).
+
+Connections are defined in `pli_dbc.json`, searched next to the
+program, then the current directory, then `~`:
 
 ```json
 { "SAMPLE": { "driver": "ibm_db",
@@ -137,12 +155,19 @@ then in `~`):
   "TESTDB": { "driver": "sqlite", "url": "testdb.sqlite" } }
 ```
 
-Drivers: `sqlite` (stdlib, used by `examples/sqldemo.pli`) and
-`ibm_db` (`pip install ibm_db`; the JDBC URL is translated to a native
-DSN).  A missing `"password"` key prompts at CONNECT — in the terminal
-for the CLI, with a dialog in the IDE.  DECIMAL columns map to exact
-`FIXED DECIMAL` values.  Limits: SQL is checked at run time (SQLCODE),
-not at compile time; no NULL indicator variables yet.
+Drivers: `sqlite` (stdlib — used by `examples/sqldemo.pli`, works
+offline) and `ibm_db` (`pip install ibm_db`; the `jdbc:db2://` URL is
+translated to a native DSN, and on Windows the bundled Db2 clidriver
+DLLs are put on the search path automatically).  A missing
+`"password"` key prompts at CONNECT — masked in the terminal for the
+CLI, a dialog in the IDE.  `examples/sqldemo_db2.pli` is the same demo
+against a real Db2.
+
+Not implemented (yet): NULL indicator variables (fetching NULL sets
+`SQLCODE` −305), dynamic SQL (`PREPARE`/`EXECUTE`/`EXECUTE IMMEDIATE`),
+positioned `UPDATE/DELETE ... WHERE CURRENT OF` (cursors are
+client-side), stored-procedure OUT parameters, scrollable cursors.
+SQL errors surface at run time via SQLCODE, not at compile time.
 
 **Operators & builtins** — full operator set incl. `¬`/`^`/`~` spellings
 and bit-string logic; ~75 builtins:
