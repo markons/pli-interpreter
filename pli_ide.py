@@ -41,17 +41,20 @@ KEYWORDS = set(reserved) | {"RECURSIVE", "MAIN", "SET", "INTO", "FROM",
                             "POSITION", "COMPLEX"}
 BUILTINS = set(_BUILTINS) | set(_NILADIC_BUILTINS)
 
-# one scanner pass: comments and strings win over everything else
+# one scanner pass: comments, EXEC SQL blocks and strings win over
+# everything else
 HL_RE = re.compile(
     r"(/\*.*?\*/)"                                    # 1 comment
-    r"|('(?:[^']|'')*'[A-Za-z]?)"                     # 2 string (+B/I suffix)
-    r"|([A-Za-z_$#@][A-Za-z0-9_$#@]*)"                # 3 name
-    r"|((?:\d+\.\d*|\.\d+|\d+)(?:[Ee][+-]?\d+)?[A-Za-z]?)"  # 4 number
-    r"|(%)",                                          # 5 preprocessor
+    r"|([Ee][Xx][Ee][Cc]\s+[Ss][Qq][Ll]\b(?:'[^']*'|[^;'])*;)"  # 2 SQL
+    r"|('(?:[^']|'')*'[A-Za-z]?)"                     # 3 string (+B/I suffix)
+    r"|([A-Za-z_$#@][A-Za-z0-9_$#@]*)"                # 4 name
+    r"|((?:\d+\.\d*|\.\d+|\d+)(?:[Ee][+-]?\d+)?[A-Za-z]?)"  # 5 number
+    r"|(%)",                                          # 6 preprocessor
     re.DOTALL)
 
 HL_COLORS = {
     "hl_com": {"foreground": "#008000"},
+    "hl_sql": {"foreground": "#1f3f77", "background": "#e8f0fe"},
     "hl_str": {"foreground": "#a31515"},
     "hl_kw": {"foreground": "#0000cc", "font": ("Consolas", 11, "bold")},
     "hl_bif": {"foreground": "#267f99"},
@@ -322,16 +325,18 @@ class PLIIDE(tk.Tk):
             if m.group(1):
                 tag = "hl_com"
             elif m.group(2):
-                tag = "hl_str"
+                tag = "hl_sql"
             elif m.group(3):
-                word = m.group(3).upper()
+                tag = "hl_str"
+            elif m.group(4):
+                word = m.group(4).upper()
                 if word in KEYWORDS:
                     tag = "hl_kw"
                 elif word in BUILTINS:
                     tag = "hl_bif"
                 else:
                     continue
-            elif m.group(4):
+            elif m.group(5):
                 tag = "hl_num"
             else:
                 tag = "hl_pp"
@@ -584,6 +589,7 @@ class PLIIDE(tk.Tk):
             try:
                 interp = Interpreter(stdin=sysin, stdout=writer)
                 interp.parser = self.parser        # reuse built grammar
+                interp.password_prompt = self._ask_password
                 interp.run(source, incdir)
                 self.out_queue.put(("done", "program ended normally"))
             except StopRun:
@@ -637,10 +643,22 @@ class PLIIDE(tk.Tk):
         self.reader.event.set()
         self.status.config(text="running...")
 
+    def _ask_password(self, prompt):
+        """Called on the worker thread: request a password dialog from
+        the GUI thread and block until it is answered."""
+        ev = threading.Event()
+        holder = {}
+        self.out_queue.put(("passwd", prompt, ev, holder))
+        while not ev.wait(0.1):
+            if self.stop_flag.is_set():
+                return ""
+        return holder.get("value") or ""
+
     def _poll_queue(self):
         try:
             while True:
-                kind, text = self.out_queue.get_nowait()
+                item = self.out_queue.get_nowait()
+                kind, text = item[0], item[1]
                 if kind == "out":
                     self.output.configure(state="normal")
                     self.output.insert("end", text)
@@ -648,6 +666,12 @@ class PLIIDE(tk.Tk):
                     self.output.configure(state="disabled")
                 elif kind == "input_req":
                     self._set_console(True)
+                elif kind == "passwd":
+                    _, prompt, ev, holder = item
+                    from tkinter import simpledialog
+                    holder["value"] = simpledialog.askstring(
+                        "Database login", prompt, show="*", parent=self)
+                    ev.set()
                 elif kind == "done":
                     self._set_console(False)
                     self.status.config(text=text)

@@ -1,0 +1,11 @@
+{
+  "TESTDB": {
+    "driver": "sqlite",
+    "url": "sqldemo.sqlite"
+  },
+  "SAMPLE": {
+    "driver": "ibm_db",
+    "url": "jdbc:db2://localhost:25000/sample",
+    "user": "db2admin"
+  }
+}

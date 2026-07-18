@@ -1,0 +1,65 @@
+/* Embedded SQL: EXEC SQL against the TESTDB (sqlite) connection
+   defined in pli_dbc.json.  Change CONNECT TO SAMPLE for Db2.      */
+SQLDEMO: PROC OPTIONS(MAIN);
+   DCL EMPID   FIXED;
+   DCL EMPNAME CHAR(12) VARYING;
+   DCL DEPT    CHAR(4)  VARYING;
+   DCL SAL     FIXED DEC(7,2);
+   DCL (N, I)  FIXED;
+
+   EXEC SQL INCLUDE SQLCA;
+   EXEC SQL WHENEVER SQLERROR GOTO SQLFAIL;
+
+   EXEC SQL CONNECT TO TESTDB;
+   PUT LIST('connected, sqlcode =', SQLCODE);
+
+   EXEC SQL DROP TABLE IF EXISTS EMP;
+   EXEC SQL CREATE TABLE EMP
+            (ID INTEGER, NAME VARCHAR(12), DEPT VARCHAR(4),
+             SALARY DECIMAL(7,2));
+
+   /* insert three rows through host variables */
+   DO I = 1 TO 3;
+      EMPID   = 100 + I;
+      EMPNAME = 'EMP' || I;
+      DEPT    = 'D0' || I;
+      SAL     = 1000.50 * I;
+      EXEC SQL INSERT INTO EMP (ID, NAME, DEPT, SALARY)
+               VALUES (:EMPID, :EMPNAME, :DEPT, :SAL);
+   END;
+
+   EXEC SQL SELECT COUNT(*) INTO :N FROM EMP;
+   PUT SKIP LIST('rows inserted:', N);
+
+   /* singleton SELECT INTO */
+   EMPID = 102;
+   EXEC SQL SELECT NAME, DEPT, SALARY INTO :EMPNAME, :DEPT, :SAL
+            FROM EMP WHERE ID = :EMPID;
+   PUT SKIP LIST('emp 102:', EMPNAME, DEPT, SAL);
+
+   /* update through host variables */
+   SAL = 9999.99;
+   EXEC SQL UPDATE EMP SET SALARY = :SAL WHERE ID = :EMPID;
+   PUT SKIP LIST('update sqlcode =', SQLCODE);
+
+   /* cursor sweep with WHENEVER NOT FOUND */
+   EXEC SQL DECLARE C1 CURSOR FOR
+            SELECT ID, NAME, SALARY FROM EMP ORDER BY ID;
+   EXEC SQL WHENEVER NOT FOUND GOTO DONE;
+   EXEC SQL OPEN C1;
+   PUT SKIP(2) LIST('ID', 'NAME', 'SALARY');
+LOOP:
+   EXEC SQL FETCH C1 INTO :EMPID, :EMPNAME, :SAL;
+   PUT SKIP LIST(EMPID, EMPNAME, SAL);
+   GOTO LOOP;
+
+DONE:
+   EXEC SQL CLOSE C1;
+   EXEC SQL COMMIT;
+   PUT SKIP(2) LIST('done, final sqlcode =', SQLCODE);
+   RETURN;
+
+SQLFAIL:
+   PUT SKIP LIST('*** SQL error', SQLCODE, SQLSTATE);
+   PUT SKIP LIST(SQLERRM);
+END SQLDEMO;

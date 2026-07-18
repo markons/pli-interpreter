@@ -119,6 +119,31 @@ values in program text.
 **Multitasking** — `CALL p(...) EVENT(E)` runs the procedure on a
 thread; `WAIT(E1, E2 [, ...]) [(n)]`, `COMPLETION()`, `STATUS()`.
 
+**Embedded SQL** — `EXEC SQL ... ;` in the style of IBM's precompiler:
+`CONNECT TO name` / `CONNECT RESET` / `SET CONNECTION`, singleton
+`SELECT ... INTO :var`, `INSERT`/`UPDATE`/`DELETE`/DDL with `:HOST`
+variables (incl. `:STRUCT.MEMBER`), cursors (`DECLARE c CURSOR FOR` /
+`OPEN` / `FETCH ... INTO` / `CLOSE`), `COMMIT`/`ROLLBACK`,
+`WHENEVER SQLERROR|SQLWARNING|NOT FOUND CONTINUE|GOTO l|STOP`, and
+`INCLUDE SQLCA` (no-op).  `SQLCODE`, `SQLSTATE` and `SQLERRM` are set
+after every statement (0 / 100 / negative).  Connections are defined in
+`pli_dbc.json` (searched next to the program, in the current directory,
+then in `~`):
+
+```json
+{ "SAMPLE": { "driver": "ibm_db",
+              "url": "jdbc:db2://localhost:25000/sample",
+              "user": "db2admin" },
+  "TESTDB": { "driver": "sqlite", "url": "testdb.sqlite" } }
+```
+
+Drivers: `sqlite` (stdlib, used by `examples/sqldemo.pli`) and
+`ibm_db` (`pip install ibm_db`; the JDBC URL is translated to a native
+DSN).  A missing `"password"` key prompts at CONNECT — in the terminal
+for the CLI, with a dialog in the IDE.  DECIMAL columns map to exact
+`FIXED DECIMAL` values.  Limits: SQL is checked at run time (SQLCODE),
+not at compile time; no NULL indicator variables yet.
+
 **Operators & builtins** — full operator set incl. `¬`/`^`/`~` spellings
 and bit-string logic; ~75 builtins:
 
@@ -162,6 +187,7 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 | `pli/picture.py` | PICTURE parsing/editing |
 | `pli/fixeddec.py` | exact FIXED DECIMAL(p,q) arithmetic |
 | `pli/preproc.py` | compile-time preprocessor |
+| `pli/sql.py` | EXEC SQL runtime (connections, cursors, WHENEVER) |
 | `pli/__main__.py` | CLI entry point (`python -m pli`) |
 | `pli/examples/` | demo programs |
 | `pli_ide.py` | Tkinter IDE (edit / compile / run) |

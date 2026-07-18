@@ -99,6 +99,7 @@ class PLIParser:
                 | free_stmt
                 | io_stmt
                 | wait_stmt
+                | execsql_stmt
                 | proc_stmt
                 | begin_stmt"""
         p[0] = p[1]
@@ -147,6 +148,10 @@ class PLIParser:
     def p_call_opt(self, p):
         "call_opt : ID LPAREN expr RPAREN"
         p[0] = (p[1], p[3])
+
+    def p_execsql_stmt(self, p):
+        "execsql_stmt : EXECSQL"
+        p[0] = N.ExecSql(p[1], lineno=p.lineno(1))
 
     def p_wait_stmt(self, p):
         """wait_stmt : WAIT LPAREN ref_list RPAREN SEMI

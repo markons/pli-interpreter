@@ -532,14 +532,27 @@ class Interpreter:
         self.in_pos = 0
         self.tasks = []          # attached task threads
         self.io_lock = threading.RLock()
+        self.sqlrt = None        # lazy SqlRuntime (EXEC SQL support)
+        self.global_env = None
+        self.include_dir = "."
+
+    def password_prompt(self, prompt):
+        """Ask the user for a database password; the IDE overrides this."""
+        import getpass
+        try:
+            return getpass.getpass(prompt)
+        except (EOFError, KeyboardInterrupt):
+            return ""
 
     # -- program entry ----------------------------------------------------
 
     def run(self, source, include_dir="."):
         from .preproc import preprocess
+        self.include_dir = include_dir
         source = preprocess(source, include_dir)
         program = self.parser.parse(source)
         genv = Environment()
+        self.global_env = genv
         main = None
         for stmt in program:
             if isinstance(stmt, N.Labeled) and isinstance(self._unlabel(stmt), N.ProcDef):
@@ -558,9 +571,17 @@ class Interpreter:
             pass
         except PLICondition as c:
             self._flush_line()
+            if self.sqlrt is not None:
+                self.sqlrt.close_all(commit=False)
             raise PLIError("unhandled condition %s: %s" % (c.name, c.msg))
+        except (PLIError, Exception):
+            if self.sqlrt is not None:
+                self.sqlrt.close_all(commit=False)
+            raise
         for t in self.tasks:      # let attached tasks finish
             t.join(timeout=10)
+        if self.sqlrt is not None:      # normal end: commit (IBM behaviour)
+            self.sqlrt.close_all(commit=True)
         self._flush_line()
 
     def _unlabel(self, stmt):
@@ -1129,6 +1150,12 @@ class Interpreter:
         t = threading.Thread(target=body, name=proc.name)
         t.start()
         self.tasks.append(t)
+
+    def exec_ExecSql(self, stmt, env):
+        if self.sqlrt is None:
+            from .sql import SqlRuntime
+            self.sqlrt = SqlRuntime(self)
+        self.sqlrt.exec_sql(stmt.text, env, stmt)
 
     def exec_WaitStmt(self, stmt, env):
         events = []

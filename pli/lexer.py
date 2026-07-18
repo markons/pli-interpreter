@@ -51,7 +51,7 @@ reserved = {
 }
 
 tokens = [
-    "ID", "NUMBER", "STRING", "BITSTRING",
+    "ID", "NUMBER", "STRING", "BITSTRING", "EXECSQL",
     "POW", "CONCAT", "NE", "LE", "GE", "EQ", "LT", "GT", "ARROW",
     "PLUS", "MINUS", "STAR", "SLASH", "AND", "OR", "NOT",
     "LPAREN", "RPAREN", "COMMA", "SEMI", "COLON", "DOT",
@@ -106,6 +106,15 @@ class PLILexer:
             t.value = FixedDec.from_literal(raw)  # exact FIXED DECIMAL
         else:
             t.value = int(raw)
+        return t
+
+    def t_EXECSQL(self, t):
+        r"[Ee][Xx][Ee][Cc]\s+[Ss][Qq][Ll]\b(?:'[^']*'|[^;'])*;"
+        # embedded SQL: everything up to the (quote-aware) semicolon is
+        # kept as opaque text for the SQL runtime; not parsed as PL/I
+        t.lexer.lineno += t.value.count("\n")
+        body = t.value[t.value.upper().index("SQL") + 3:-1]
+        t.value = body.strip()
         return t
 
     def t_ID(self, t):

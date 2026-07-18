@@ -60,6 +60,7 @@ FreeStmt = _mk("FreeStmt", "names")
 IOStmt = _mk("IOStmt", "verb", "opts")  # OPEN/CLOSE/READ/WRITE/REWRITE/DELETE
                                         # opts: [(NAME, expr-or-None), ...]
 WaitStmt = _mk("WaitStmt", "refs", "count")
+ExecSql = _mk("ExecSql", "text")        # EXEC SQL ... ; (opaque SQL text)
 Put = _mk("Put", "clauses")     # clauses: [("PAGE",)|("SKIP",n)|("LIST",items)
                                 #           |("EDIT",items,formats)]
 Get = _mk("Get", "clauses")     # clauses: [("SKIP",n)|("LIST",refs)]
