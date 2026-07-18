@@ -117,3 +117,21 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   server-side cursors for WHERE CURRENT OF.
 - "Large apps" gaps: separate compilation/external procedures, IDE
   debugger (statement loop makes stepping easy), batch test harness.
+- Remaining Tier-1 language gaps after v0.3.0: multiple assignment
+  (A,B = 0), GET STRING ... EDIT, label arrays, separate compilation.
+- Executable output plan (planned 2026-07, not started; owner asked
+  "unix executables as compiler output"):
+  - Phase 0 (hours): shebang support — lexer skips leading #! line so
+    `#!/usr/bin/env pli` + chmod +x makes .pli files executable.
+  - Phase 1 (days): `pli-build prog.pli -o prog` via PyInstaller =
+    self-contained single-file binaries (no Python needed on target);
+    build per-OS via GitHub Actions release matrix. ~15-30MB, ~1s
+    startup, NO speedup; ibm_db needs clidriver tree collected.
+  - Phase 2: compose with the transpile-to-Python backend for speed.
+  - Phase 3 (months, deferred): true native — emit C (setjmp/longjmp
+    for GOTO/ON, ~5-8k-line C runtime) OR preferably via the Rust
+    track: shared runtime, `plirs build` appending AST to interpreter
+    binary (deno-compile trick) or emit-Rust + cargo. llvmlite saves
+    nothing (runtime lib is the cost center).
+  - Recommendation given: do 0+1 together (<1 week) when asked; defer
+    3 until transpiler proves insufficient or Rust port is greenlit.
