@@ -138,9 +138,32 @@ class SqlRuntime:
         elif driver == "ibm_db":
             try:
                 import ibm_db_dbi
-            except ImportError:
-                raise SQLError("driver ibm_db not installed "
-                               "(pip install ibm_db)")
+            except ImportError as first_err:
+                # Windows: the bundled Db2 clidriver DLLs are often not
+                # on the DLL search path; register them and retry
+                added = False
+                try:
+                    import site
+                    dirs = list(site.getsitepackages())
+                    dirs.append(site.getusersitepackages())
+                except Exception:
+                    dirs = []
+                for sp in dirs:
+                    bindir = os.path.join(sp, "clidriver", "bin")
+                    if os.path.isdir(bindir) and hasattr(os,
+                                                         "add_dll_directory"):
+                        os.add_dll_directory(bindir)
+                        os.environ["PATH"] = (bindir + os.pathsep +
+                                              os.environ.get("PATH", ""))
+                        added = True
+                if not added:
+                    raise SQLError("driver ibm_db not installed "
+                                   "(pip install ibm_db): %s" % first_err)
+                try:
+                    import ibm_db_dbi
+                except ImportError as e:
+                    raise SQLError("ibm_db is installed but its Db2 "
+                                   "client DLLs failed to load: %s" % e)
             p = parse_jdbc_db2(url) if url.lower().startswith("jdbc:") \
                 else {"host": cfg.get("host", "localhost"),
                       "port": cfg.get("port", 50000),
