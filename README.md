@@ -109,6 +109,21 @@ ON-units.  `ALLOCATE A(N);` re-specifies CONTROLLED bounds per
 allocation.  `GET` supports the `COPY` option (echoes input) and
 `GET STRING(...) EDIT(...)(...)`.
 
+**F-personality features (v0.5.0)** — `(CHECK(A,B)):` prefixes monitor
+assignments to the listed variables (default action prints `A=value;`
+data-directed; `ON CHECK(x)` overrides).  Inside `ON CONVERSION` units
+the pseudo-variables `ONSOURCE`/`ONCHAR` may be assigned to correct the
+offending string, and a normal return **retries the conversion**.
+Secondary entry points: `P2: ENTRY(...) RETURNS(...);` inside a
+procedure.  `S1 = S2, BY NAME;` structure assignment by member name.
+**Aggregate expressions**: elementwise array arithmetic and `||`
+(`C = A + B;`, `C = A*2 + 1;`, `-A`) with scalar broadcast, and array
+**cross-sections** `M(2,*)` / `M(*,1)` in expressions and as targets.
+PRINT paging on SYSPRINT: `OPEN FILE(SYSPRINT) PAGESIZE(n);`,
+`ENDPAGE` condition (the interrupted PUT resumes after the ON-unit),
+`PUT PAGE`, and the `LINENO` / `COUNT` builtins.  `DCL X ENTRY(...)`
+declarations are accepted as descriptive.
+
 **ON-conditions** — `ON cond [SNAP] unit | SYSTEM`, `SIGNAL`, `REVERT`,
 `ONCODE`/`ONCHAR`/`ONSOURCE`, user conditions via `CONDITION(name)`.
 Raised: `ZERODIVIDE`, `FIXEDOVERFLOW`, `SIZE`, `CONVERSION`,

@@ -191,6 +191,41 @@ class PLIArray:
     def set(self, subs, value):
         self.data[self._offset(subs)] = convert(value, self.decl)
 
+    def _cross_indices(self, subs):
+        """Full index tuples, row-major, with '*' dims iterated."""
+        dims = []
+        for (lo, hi), s in zip(self.bounds, subs):
+            if s == "*":
+                dims.append(list(range(lo, hi + 1)))
+            else:
+                dims.append([int(to_number(s))])
+
+        def rec(k):
+            if k == len(dims):
+                yield ()
+                return
+            for v in dims[k]:
+                for rest in rec(k + 1):
+                    yield (v,) + rest
+        return list(rec(0))
+
+    def cross_get(self, subs):
+        new_bounds = [b for b, s in zip(self.bounds, subs) if s == "*"]
+        out = PLIArray(new_bounds or [(1, 1)], self.decl)
+        out.data = [self.get(list(idx)) for idx in self._cross_indices(subs)]
+        return out
+
+    def cross_set(self, subs, value):
+        idxs = self._cross_indices(subs)
+        if isinstance(value, PLIArray):
+            if len(value.data) != len(idxs):
+                raise PLIError("cross-section assignment: extent mismatch")
+            for idx, v in zip(idxs, value.data):
+                self.set(list(idx), v)
+        else:
+            for idx in idxs:
+                self.set(list(idx), value)
+
 
 class PLIStructArray:
     """An array of structures: DCL 1 T(10), 2 A ..., 2 B ...;"""
@@ -249,6 +284,18 @@ class Procedure:
         self.name = name
         self.node = node          # ProcDef
         self.env = env            # defining environment (static scoping)
+        self.start = 0            # first statement index to execute
+        self.params = None        # None = use node.params
+        self.returns = None       # None = use node.returns
+
+
+class SecondaryEntry(Procedure):
+    """X: ENTRY(...); inside a procedure: execution starts there."""
+    def __init__(self, name, node, env, start, params, returns):
+        super().__init__(name, node, env)
+        self.start = start
+        self.params = params
+        self.returns = returns if returns else None
 
 
 class FormatDef:
@@ -407,10 +454,13 @@ def to_number(v):
             try:
                 return float(s)
             except ValueError:
-                bad = next((c for c in s if c not in "0123456789+-.E"), s[0])
-                raise PLICondition("CONVERSION",
-                                   "cannot convert %r to a number" % v,
-                                   char=bad, source=v)
+                pos = next((i for i, c in enumerate(v)
+                            if c not in "0123456789+-.E "), 0)
+                c = PLICondition("CONVERSION",
+                                 "cannot convert %r to a number" % v,
+                                 char=v[pos] if v else "", source=v)
+                c.char_pos = pos
+                raise c
     raise PLIError("cannot convert %r to a number" % (v,))
 
 
@@ -606,6 +656,10 @@ class Interpreter:
         self.include_dir = "."
         self.static_store = {}   # id(DeclItem) -> retained STATIC entry
         self.proc_stack = []     # names of active procedures (ONLOC)
+        self.checked = set()     # variables under (CHECK(...)): prefixes
+        self.page_size = 60      # SYSPRINT PAGESIZE
+        self.line_no = 1         # current line on the page (LINENO)
+        self.last_count = 0      # items moved by last GET/PUT (COUNT)
 
     def password_prompt(self, prompt):
         """Ask the user for a database password; the IDE overrides this."""
@@ -628,7 +682,7 @@ class Interpreter:
         for stmt in program:
             if isinstance(stmt, N.Labeled) and isinstance(self._unlabel(stmt), N.ProcDef):
                 name, proc = self._proc_of(stmt)
-                genv.declare(name, Procedure(name, proc, genv))
+                self._register_proc(name, proc, genv)
                 opts = [o.upper() for o in proc.options]
                 if "MAIN" in opts or main is None:
                     main = genv.vars[name]
@@ -668,22 +722,25 @@ class Interpreter:
 
     def call_procedure(self, proc, arg_cells):
         node = proc.node
-        if len(arg_cells) != len(node.params):
+        params = proc.params if proc.params is not None else node.params
+        returns = proc.returns if proc.returns is not None else node.returns
+        if len(arg_cells) != len(params):
             raise PLIError("%s: expected %d argument(s), got %d"
-                           % (proc.name, len(node.params), len(arg_cells)))
+                           % (proc.name, len(params), len(arg_cells)))
         env = Environment(proc.env)
-        for pname, cell in zip(node.params, arg_cells):
+        for pname, cell in zip(params, arg_cells):
             env.declare(pname, cell)
         self._hoist_procs(node.body, env)
         self._hoist_labels(node.body, env)
         self.cond_frames.append({})
         self.proc_stack.append(proc.name)
         try:
-            self.exec_block(node.body, env)
+            self.exec_block(node.body, env, start=proc.start)
         except ReturnSignal as r:
             value = r.value
-            if value is not None and node.returns:
-                value = convert(value, self._resolve_attrs(None, node.returns, env))
+            if value is not None and returns:
+                value = convert(value, self._resolve_attrs(None, returns,
+                                                           env))
             return value
         finally:
             self.cond_frames.pop()
@@ -727,11 +784,23 @@ class Interpreter:
             if isinstance(stmt, N.Labeled):
                 inner = self._unlabel(stmt)
                 if isinstance(inner, N.ProcDef):
-                    env.declare(stmt.name, Procedure(stmt.name, inner, env))
+                    self._register_proc(stmt.name, inner, env)
+
+    def _register_proc(self, name, procnode, env):
+        env.declare(name, Procedure(name, procnode, env))
+        # secondary entry points: labeled ENTRY statements at the top
+        # level of the procedure body
+        for i, s in enumerate(procnode.body):
+            if isinstance(s, N.Labeled):
+                inner = self._unlabel(s)
+                if isinstance(inner, N.EntryStmt):
+                    env.declare(s.name, SecondaryEntry(
+                        s.name, procnode, env, i + 1,
+                        inner.params, inner.returns))
 
     # -- statement execution ---------------------------------------------------
 
-    def exec_block(self, stmts, env):
+    def exec_block(self, stmts, env, start=0):
         """Execute a statement list, handling GOTO to labels in this list."""
         labels = {}
         for i, s in enumerate(stmts):
@@ -740,7 +809,7 @@ class Interpreter:
                 if isinstance(t, N.Labeled):
                     labels[t.name] = i
                 t = t.stmt
-        i = 0
+        i = start
         while i < len(stmts):
             try:
                 self.exec_stmt(stmts[i], env)
@@ -780,7 +849,10 @@ class Interpreter:
                 self.exec_stmt(unit, est_env)
                 return
         # default (system) action
-        if cond.name == "FINISH":
+        if cond.name in ("FINISH", "CHECK"):
+            return
+        if cond.name == "ENDPAGE":
+            self.line_no = 1          # implicit new page
             return
         if cond.name != "ERROR":
             msg = "condition %s raised: %s" % (cond.name, cond.msg)
@@ -812,6 +884,9 @@ class Interpreter:
     def exec_FormatStmt(self, stmt, env):
         pass  # registered at block entry; no effect when flow reaches it
 
+    def exec_EntryStmt(self, stmt, env):
+        pass  # falling into an ENTRY point during sequential flow: no-op
+
     def exec_ProcDef(self, stmt, env):
         raise PLIError("line %d: unlabeled PROCEDURE" % stmt.lineno)
 
@@ -836,6 +911,8 @@ class Interpreter:
 
     def _declare_one(self, name, item, env):
         kinds = {k for k, _ in item.attrs}
+        if "ENTRY" in kinds or "ENTRY_RETURNS" in kinds:
+            return    # entry declarations are descriptive; never shadow
         if "FILE" in kinds:
             f = PLIFile(name)
             for k, v in item.attrs:
@@ -1141,7 +1218,8 @@ class Interpreter:
                 else:
                     raise PLIError("unknown attribute %s" % gname)
             elif kind in ("INIT", "STATIC", "AUTOMATIC", "LIKE",
-                          "BASED", "CONTROLLED", "DEFINED"):
+                          "BASED", "CONTROLLED", "DEFINED",
+                          "ENTRY", "ENTRY_RETURNS"):
                 pass
         if base is None:
             base = (Decl.default_for(name).base if name
@@ -1150,11 +1228,32 @@ class Interpreter:
 
     def exec_Assign(self, stmt, env):
         value = self.eval(stmt.value, env)
+        if getattr(stmt, "byname", False):    # S1 = S2, BY NAME;
+            dst = self.eval(stmt.target, env)
+            if not isinstance(dst, PLIStructure) or \
+                    not isinstance(value, PLIStructure):
+                raise PLIError("line %d: BY NAME needs structures on "
+                               "both sides" % stmt.lineno)
+            self._assign_by_name(dst, value)
+            return
         if isinstance(stmt.target, list):     # A, B, C = expr;
             for t in stmt.target:
                 self.assign_target(t, value, env)
         else:
             self.assign_target(stmt.target, value, env)
+
+    def _assign_by_name(self, dst, src):
+        """Structure assignment matching member names (recursively)."""
+        for name, d in dst.members.items():
+            s = src.members.get(name)
+            if s is None:
+                continue
+            if isinstance(d, PLIStructure) and isinstance(s, PLIStructure):
+                self._assign_by_name(d, s)
+            elif isinstance(d, Variable) and isinstance(s, Variable):
+                d.value = convert(s.value, d.decl)
+            elif isinstance(d, PLIArray) and isinstance(s, PLIArray):
+                self._assign_array(d, s)
 
     def exec_Display(self, stmt, env):
         text = to_string(self.eval(stmt.value, env))
@@ -1176,12 +1275,52 @@ class Interpreter:
             self.assign_ptrref(node, value, env)
         else:
             self.assign_ref(node, value, env)
+        if self.checked:
+            name = getattr(node, "name", None)
+            if name in self.checked:
+                self._raise_check(name, value, env)
+
+    def _has_handler(self, cond, qual=None):
+        for frame in self.cond_frames:
+            if (cond, qual) in frame or (cond, None) in frame:
+                return True
+        return False
+
+    def _raise_check(self, name, value, env):
+        """CHECK condition after an assignment to a monitored variable.
+        Default system action: data-directed print 'NAME= value;'."""
+        if self._has_handler("CHECK", name):
+            raise PLICondition("CHECK", "CHECK(%s)" % name, qual=name)
+        self._flush_line()
+        if isinstance(value, str) and not isinstance(value,
+                                                     (BitStr, PicStr)):
+            text = "%s='%s';" % (name, value.replace("'", "''"))
+        else:
+            text = "%s=%s;" % (name, format_number(value)
+                               if not isinstance(value, (str,))
+                               else str(value))
+        self._write(text + "\n")
 
     def assign_ref(self, ref, value, env):
         name, args = ref.name, ref.args
         entry = env.lookup(name)
         if entry is None and name == "SUBSTR" and args:
             return self._assign_substr(args, value, env)
+        if entry is None and name in ("ONSOURCE", "ONCHAR") and not args:
+            # pseudo-variables inside an ON CONVERSION unit: correct the
+            # offending source and mark it for retry
+            c = self.current_cond
+            if c is None or c.name != "CONVERSION":
+                raise PLIError("%s pseudo-variable outside ON CONVERSION"
+                               % name)
+            if name == "ONSOURCE":
+                c.source = to_string(value)
+            else:
+                pos = getattr(c, "char_pos", 0)
+                ch = to_string(value)[:1] or " "
+                c.source = c.source[:pos] + ch + c.source[pos + 1:]
+            c.fixed = True
+            return
         if entry is None and name == "UNSPEC" and args:
             target = args[0]
             decl = None
@@ -1203,6 +1342,23 @@ class Interpreter:
             return
         self._assign_entry(entry, args, value, ref, env)
 
+    def _convert(self, value, decl, env):
+        """convert() with ON CONVERSION retry: if the established unit
+        corrects ONSOURCE/ONCHAR and returns normally, the conversion
+        is retried with the corrected string (max 10 attempts)."""
+        for _ in range(10):
+            try:
+                return convert(value, decl)
+            except PLICondition as c:
+                if c.name != "CONVERSION":
+                    raise
+                c.fixed = False
+                self.dispatch_condition(c)     # may GOTO out (propagates)
+                if not getattr(c, "fixed", False):
+                    raise PLIError("CONVERSION not corrected: %s" % c.msg)
+                value = c.source
+        raise PLIError("CONVERSION retry limit exceeded")
+
     def _assign_entry(self, entry, args, value, ref, env):
         if isinstance(entry, BasedVar):
             return self._assign_entry(self._based_target(entry, env),
@@ -1217,14 +1373,17 @@ class Interpreter:
             if args is None:
                 self._assign_array(entry, value)
                 return
-            subs = [self.eval(a, env) for a in args]
+            subs = [a if a == "*" else self.eval(a, env) for a in args]
+            if "*" in subs:
+                entry.cross_set(subs, value)
+                return
             entry.set(subs, value)
             return
         if isinstance(entry, Variable):
             if args is not None:
                 raise PLIError("line %d: %s is not an array"
                                % (ref.lineno, ref.name))
-            entry.value = convert(value, entry.decl)
+            entry.value = self._convert(value, entry.decl, env)
             return
         if isinstance(entry, PLIStructure):
             self._assign_structure(entry, value)
@@ -1404,6 +1563,9 @@ class Interpreter:
 
     def _arg_cell(self, arg, env):
         """By-reference for plain variables, dummy Variable otherwise."""
+        if arg == "*":
+            raise PLIError("'*' subscript is only valid in array "
+                           "cross-sections")
         if isinstance(arg, N.Ref):
             entry = env.lookup(arg.name)
             if arg.args is None and isinstance(
@@ -1558,14 +1720,24 @@ class Interpreter:
         self.cond_frames[-1].pop((stmt.cond.upper(), stmt.qual), None)
 
     def exec_Prefix(self, stmt, env):
-        """(NOSIZE): / (SIZE): etc. — scoped enable/disable.  Disabled
-        SIZE truncates silently; disabled STRINGRANGE clamps SUBSTR.
-        SUBSCRIPTRANGE remains checked regardless (safety)."""
+        """(NOSIZE): / (SIZE): / (CHECK(A,B)): — scoped condition
+        prefixes.  Disabled SIZE truncates silently; disabled
+        STRINGRANGE clamps SUBSTR; CHECK monitors assignments to the
+        listed variables.  SUBSCRIPTRANGE remains checked regardless."""
         saved = set(_DISABLED)
+        saved_chk = set(self.checked)
         try:
-            for nm in stmt.names:
+            for nm, args in stmt.names:
                 n = nm.upper()
-                if n.startswith("NO") and n[2:] in _PREFIXABLE:
+                if n == "CHECK":
+                    self.checked.update(a.upper() for a in (args or []))
+                elif n == "NOCHECK":
+                    if args:
+                        self.checked.difference_update(
+                            a.upper() for a in args)
+                    else:
+                        self.checked.clear()
+                elif n.startswith("NO") and n[2:] in _PREFIXABLE:
                     _DISABLED.add(n[2:])
                 elif n in _PREFIXABLE:
                     _DISABLED.discard(n)
@@ -1573,6 +1745,7 @@ class Interpreter:
         finally:
             _DISABLED.clear()
             _DISABLED.update(saved)
+            self.checked = saved_chk
 
     def exec_Return(self, stmt, env):
         raise ReturnSignal(self.eval(stmt.value, env)
@@ -1592,6 +1765,7 @@ class Interpreter:
     def _write(self, text):
         with self.io_lock:
             self.stdout.write(text)
+        self.line_no += text.count("\n")
         nl = text.rfind("\n")
         if nl >= 0:
             self.column = len(text) - nl - 1
@@ -1599,7 +1773,21 @@ class Interpreter:
             self.column += len(text)
 
     def _newline(self, n=1):
-        self._write("\n" * max(1, n))
+        for _ in range(max(1, n)):
+            self._write("\n")
+            if self.line_no > self.page_size and \
+                    not getattr(self, "_in_endpage", False):
+                self.line_no = 1          # new page either way
+                if self._has_handler("ENDPAGE", "SYSPRINT"):
+                    # dispatch inline: the interrupted PUT resumes right
+                    # here after the ON-unit returns (F semantics)
+                    self._in_endpage = True
+                    try:
+                        self.dispatch_condition(
+                            PLICondition("ENDPAGE", "page overflow",
+                                         qual="SYSPRINT"))
+                    finally:
+                        self._in_endpage = False
 
     def _flush_line(self):
         if self.column > 0:
@@ -1639,10 +1827,23 @@ class Interpreter:
 
     def _put_clauses(self, clauses, env):
         wrote_data = False
+        n_items = 0
+        for c in clauses:
+            if c[0] in ("LIST", "EDIT", "DATA") and c[1]:
+                n_items += len(c[1])
+        try:
+            self._run_put_clauses(clauses, env)
+        finally:
+            if n_items:               # COUNT reflects the completed PUT
+                self.last_count = n_items
+
+    def _run_put_clauses(self, clauses, env):
+        wrote_data = False
         for clause in clauses:
             kind = clause[0]
             if kind == "PAGE":
                 self._flush_line()
+                self.line_no = 1              # new page
             elif kind == "SKIP":
                 n = (int(to_number(self.eval(clause[1], env)))
                      if clause[1] is not None else 1)
@@ -1874,6 +2075,8 @@ class Interpreter:
                  self.in_line, self.in_pos) = saved
             return
         self.copy_input = any(c[0] == "COPY" for c in clauses)
+        n_items = sum(len(c[1]) for c in clauses
+                      if c[0] in ("LIST", "EDIT") and c[1])
         try:
             for clause in stmt.clauses:
                 if clause[0] == "SKIP":
@@ -1888,6 +2091,8 @@ class Interpreter:
                     self._get_edit(clause[1], clause[2], env)
         finally:
             self.copy_input = False
+            if n_items:               # COUNT reflects the completed GET
+                self.last_count = n_items
 
     def _get_data(self, env):
         """GET DATA: read NAME=value pairs terminated by a semicolon."""
@@ -2086,7 +2291,10 @@ class Interpreter:
         if isinstance(entry, PLIArray):
             if node.args is None:
                 return entry     # whole-array reference (aggregate)
-            subs = [self.eval(a, env) for a in node.args]
+            subs = [a if a == "*" else self.eval(a, env)
+                    for a in node.args]
+            if "*" in subs:
+                return entry.cross_get(subs)
             return entry.get(subs)
         if isinstance(entry, PLIStructure):
             if node.args is not None:
@@ -2302,6 +2510,12 @@ class Interpreter:
         f = self._file_entry(fname, env)
         verb = stmt.verb
         if verb == "OPEN":
+            if fname == "SYSPRINT":
+                # PRINT-file options on the standard output channel
+                if opts.get("PAGESIZE") is not None:
+                    self.page_size = int(to_number(
+                        self.eval(opts["PAGESIZE"], env)))
+                return
             for m in ("INPUT", "OUTPUT", "UPDATE"):
                 if m in opts:
                     f.mode = m
@@ -2465,6 +2679,11 @@ class Interpreter:
 
     def eval_UnOp(self, node, env):
         v = self.eval(node.operand, env)
+        if isinstance(v, PLIArray) and node.op in ("MINUS", "PLUS"):
+            out = PLIArray(v.bounds, v.decl)
+            sign = -1 if node.op == "MINUS" else 1
+            out.data = [sign * to_number(x) for x in v.data]
+            return out
         if node.op == "MINUS":
             return -to_number(v)
         if node.op == "PLUS":
@@ -2478,9 +2697,11 @@ class Interpreter:
     def eval_BinOp(self, node, env):
         op = node.op
         left = self.eval(node.left, env)
-        if op in ("AND", "OR"):
-            return self._bitop(op, left, self.eval(node.right, env))
         right = self.eval(node.right, env)
+        if isinstance(left, PLIArray) or isinstance(right, PLIArray):
+            return self._array_binop(op, left, right, node)
+        if op in ("AND", "OR"):
+            return self._bitop(op, left, right)
         if op == "CONCAT":
             if isinstance(left, BitStr) and isinstance(right, BitStr):
                 return BitStr(str(left) + str(right))
@@ -2489,6 +2710,64 @@ class Interpreter:
             return self._compare(op, left, right)
         a, b = to_number(left), to_number(right)
         # FIXED DECIMAL mixes with float/complex as floating-point
+        if isinstance(a, FixedDec) and isinstance(b, (float, complex)):
+            a = float(a)
+        if isinstance(b, FixedDec) and isinstance(a, (float, complex)):
+            b = float(b)
+        try:
+            if op == "PLUS":
+                return a + b
+            if op == "MINUS":
+                return a - b
+            if op == "STAR":
+                return a * b
+            if op == "SLASH":
+                if b == 0:
+                    raise PLICondition("ZERODIVIDE",
+                                       "line %d: division by zero"
+                                       % node.lineno)
+                r = a / b
+                return int(r) if isinstance(a, int) and isinstance(b, int) \
+                    and a % b == 0 else r
+            if op == "POW":
+                r = a ** b
+                if isinstance(a, int) and isinstance(b, int) and b >= 0:
+                    return int(r)
+                return r
+        except FixedOverflow as e:
+            raise PLICondition("FIXEDOVERFLOW",
+                               "line %d: %s" % (node.lineno, e))
+        except ZeroDivisionError:
+            raise PLICondition("ZERODIVIDE",
+                               "line %d: division by zero" % node.lineno)
+        raise PLIError("unknown operator %s" % op)
+
+    def _array_binop(self, op, left, right, node):
+        """Elementwise array expressions: A + B, A * 2, A || '.', -A.
+        Shapes must match; scalars broadcast.  Comparisons and bit
+        operators on arrays are not supported."""
+        if op in ("EQ", "NE", "LT", "LE", "GT", "GE", "AND", "OR"):
+            raise PLIError("line %d: %s not supported on array operands"
+                           % (node.lineno, node.op))
+        la = left if isinstance(left, PLIArray) else None
+        ra = right if isinstance(right, PLIArray) else None
+        if la is not None and ra is not None and \
+                len(la.data) != len(ra.data):
+            raise PLIError("line %d: array extents differ" % node.lineno)
+        model = la if la is not None else ra
+        out = PLIArray(model.bounds, model.decl)
+        for i in range(len(model.data)):
+            a = la.data[i] if la is not None else left
+            b = ra.data[i] if ra is not None else right
+            out.data[i] = self._apply_scalar_op(op, a, b, node)
+        return out
+
+    def _apply_scalar_op(self, op, left, right, node):
+        if op == "CONCAT":
+            if isinstance(left, BitStr) and isinstance(right, BitStr):
+                return BitStr(str(left) + str(right))
+            return to_string(left) + to_string(right)
+        a, b = to_number(left), to_number(right)
         if isinstance(a, FixedDec) and isinstance(b, (float, complex)):
             a = float(a)
         if isinstance(b, FixedDec) and isinstance(a, (float, complex)):
@@ -2574,8 +2853,9 @@ class Interpreter:
 
 _NILADIC_BUILTINS = {"DATE", "TIME", "DATETIME", "ONCODE", "ONCHAR",
                      "ONSOURCE", "ONLOC", "ONFILE", "ONKEY",
-                     "NULL", "RANDOM"}
-_UNEVALUATED_BUILTINS = {"HBOUND", "LBOUND", "DIM", "ADDR", "ALLOCATION"}
+                     "NULL", "RANDOM", "LINENO", "COUNT"}
+_UNEVALUATED_BUILTINS = {"HBOUND", "LBOUND", "DIM", "ADDR", "ALLOCATION",
+                         "LINENO", "COUNT"}
 
 _BUILTINS = {
     "ABS", "MOD", "REM", "MIN", "MAX", "SIGN", "CEIL", "FLOOR", "TRUNC",
@@ -2591,7 +2871,7 @@ _BUILTINS = {
     "VERIFYR", "TALLY", "HIGH", "LOW", "BOOL", "STRING",
     "SINH", "COSH", "TANH", "ATANH", "ERF", "ERFC", "ATAND",
     "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE",
-    "SUM", "PROD", "DATETIME", "RANDOM",
+    "SUM", "PROD", "DATETIME", "RANDOM", "LINENO", "COUNT",
 }
 
 
@@ -2842,6 +3122,10 @@ def builtin_dispatch(interp, name, args, node, env):
         return _random.random()
     if name == "DATETIME":
         return time.strftime("%Y%m%d%H%M%S") + "000"
+    if name == "LINENO":
+        return interp.line_no
+    if name == "COUNT":
+        return interp.last_count
     if name == "REAL":
         return complex(num(0)).real
     if name == "IMAG":
@@ -2905,7 +3189,7 @@ def run_source(source, stdin=None, stdout=None, include_dir="."):
 
 
 def run_file(path, stdin=None, stdout=None):
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:   # tolerate BOM
         source = f.read()
     run_source(source, stdin=stdin, stdout=stdout,
                include_dir=os.path.dirname(os.path.abspath(path)))

@@ -63,6 +63,7 @@ IOStmt = _mk("IOStmt", "verb", "opts")  # OPEN/CLOSE/READ/WRITE/REWRITE/DELETE
 WaitStmt = _mk("WaitStmt", "refs", "count")
 ExecSql = _mk("ExecSql", "text")        # EXEC SQL ... ; (opaque SQL text)
 Display = _mk("Display", "value", "reply")  # DISPLAY(e) [REPLY(ref)]
+EntryStmt = _mk("EntryStmt", "params", "returns")  # X: ENTRY(...);
 Put = _mk("Put", "clauses")     # clauses: [("PAGE",)|("SKIP",n)|("LIST",items)
                                 #           |("EDIT",items,formats)]
 Get = _mk("Get", "clauses")     # clauses: [("SKIP",n)|("LIST",refs)]

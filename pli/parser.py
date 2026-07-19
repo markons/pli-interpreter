@@ -157,8 +157,18 @@ class PLIParser:
         p[0] = N.Labeled(p[1], p[3], lineno=p.lineno(1))
 
     def p_stmt_prefix(self, p):
-        "stmt : LPAREN id_list RPAREN COLON stmt"
+        "stmt : LPAREN prefix_list RPAREN COLON stmt"
         p[0] = N.Prefix(p[2], p[5], lineno=p.lineno(1))
+
+    def p_prefix_list(self, p):
+        """prefix_list : prefix_list COMMA prefix_item
+                       | prefix_item"""
+        p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
+
+    def p_prefix_item(self, p):
+        """prefix_item : ID
+                       | ID LPAREN id_list RPAREN"""
+        p[0] = (p[1], p[3] if len(p) == 5 else None)
 
     def p_stmt_simple(self, p):
         """stmt : assign_stmt
@@ -185,17 +195,24 @@ class PLIParser:
                 | wait_stmt
                 | execsql_stmt
                 | display_stmt
+                | entry_stmt
                 | proc_stmt
                 | begin_stmt"""
         p[0] = p[1]
 
     def p_assign_stmt(self, p):
         """assign_stmt : ref EQ expr SEMI
-                       | ref COMMA target_list EQ expr SEMI"""
+                       | ref COMMA target_list EQ expr SEMI
+                       | ref EQ expr COMMA BY ID SEMI"""
         if len(p) == 5:
             p[0] = N.Assign(p[1], p[3], lineno=p[1].lineno)
-        else:
+        elif len(p) == 7:
             p[0] = N.Assign([p[1]] + p[3], p[5], lineno=p[1].lineno)
+        else:
+            if p[6] != "NAME":
+                self._err("line %d: expected NAME after BY" % p.lineno(5))
+            p[0] = N.Assign(p[1], p[3], lineno=p[1].lineno)
+            p[0].byname = True
 
     def p_target_list(self, p):
         """target_list : target_list COMMA ref
@@ -204,21 +221,31 @@ class PLIParser:
 
     def p_ref(self, p):
         """ref : ID
-               | ID LPAREN expr_list RPAREN"""
+               | ID LPAREN sub_list RPAREN"""
         args = p[3] if len(p) == 5 else None
         p[0] = N.Ref(p[1], args, lineno=p.lineno(1))
 
     def p_ref_member(self, p):
         """ref : ref DOT ID
-               | ref DOT ID LPAREN expr_list RPAREN"""
+               | ref DOT ID LPAREN sub_list RPAREN"""
         args = p[5] if len(p) == 7 else None
         p[0] = N.Member(p[1], p[3], args, lineno=p.lineno(3))
 
     def p_ref_pointer(self, p):
         """ref : ref ARROW ID
-               | ref ARROW ID LPAREN expr_list RPAREN"""
+               | ref ARROW ID LPAREN sub_list RPAREN"""
         args = p[5] if len(p) == 7 else None
         p[0] = N.PtrRef(p[1], p[3], args, lineno=p.lineno(3))
+
+    def p_sub_list(self, p):
+        """sub_list : sub_list COMMA sub
+                    | sub"""
+        p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
+
+    def p_sub(self, p):
+        """sub : expr
+               | STAR"""
+        p[0] = "*" if p[1] == "*" else p[1]      # '*' = cross-section
 
     def p_call_stmt(self, p):
         """call_stmt : CALL ID SEMI
@@ -531,6 +558,19 @@ class PLIParser:
         "attr : FILE"
         p[0] = ("FILE", None)
 
+    def p_attr_entry(self, p):
+        """attr : ENTRYKW
+                | ENTRYKW LPAREN entry_desc_list RPAREN
+                | RETURNS LPAREN attr_seq RPAREN"""
+        # entry declarations are descriptive only in this interpreter
+        p[0] = ("ENTRY", None) if p.slice[1].type == "ENTRYKW" \
+            else ("ENTRY_RETURNS", None)
+
+    def p_entry_desc_list(self, p):
+        """entry_desc_list : entry_desc_list COMMA attr_seq
+                           | attr_seq"""
+        p[0] = None
+
     def p_allocate_stmt(self, p):
         "allocate_stmt : ALLOCATE alloc_list SEMI"
         p[0] = N.AllocStmt(p[2], lineno=p.lineno(1))
@@ -651,32 +691,38 @@ class PLIParser:
                        | format_item"""
         p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
 
-    def p_format_item_rep(self, p):
-        """format_item : NUMBER format_item
-                       | NUMBER LPAREN format_list RPAREN
-                       | LPAREN expr RPAREN format_item
-                       | LPAREN expr RPAREN LPAREN format_list RPAREN"""
-        if p.slice[1].type == "NUMBER":
-            count = N.Num(p[1], lineno=p.lineno(1))
-            sub = p[2] if len(p) == 3 else p[3]
-        else:
-            count = p[2]
-            sub = p[4] if len(p) == 5 else p[6]
-        items = sub if isinstance(sub, list) else [sub]
-        p[0] = N.FormatItem("REP", [count, items])
+    def p_format_item(self, p):
+        """format_item : format_basic
+                       | format_rep"""
+        p[0] = p[1]
 
-    def p_format_item_pic(self, p):
-        "format_item : ID STRING"
+    def p_format_rep(self, p):
+        """format_rep : NUMBER format_rep_body
+                      | LPAREN expr RPAREN format_rep_body"""
+        if p.slice[1].type == "NUMBER":
+            count, body = N.Num(p[1], lineno=p.lineno(1)), p[2]
+        else:
+            count, body = p[2], p[4]
+        p[0] = N.FormatItem("REP", [count, body])
+
+    def p_format_rep_body(self, p):
+        """format_rep_body : format_basic
+                           | LPAREN format_list RPAREN"""
+        # after a repetition count, '(' always opens a format group
+        p[0] = [p[1]] if len(p) == 2 else p[2]
+
+    def p_format_basic_pic(self, p):
+        "format_basic : ID STRING"
         if p[1] != "P":
             self._err("line %d: unknown format item %s'...'"
                       % (p.lineno(1), p[1]))
         p[0] = N.FormatItem("P", [N.Str(p[2])])
 
-    def p_format_item(self, p):
-        """format_item : ID
-                       | ID LPAREN expr_list RPAREN
-                       | SKIP
-                       | SKIP LPAREN expr RPAREN"""
+    def p_format_basic(self, p):
+        """format_basic : ID
+                        | ID LPAREN expr_list RPAREN
+                        | SKIP
+                        | SKIP LPAREN expr RPAREN"""
         name = p[1] if p.slice[1].type == "ID" else "SKIP"
         if len(p) == 2:
             p[0] = N.FormatItem(name, [])
@@ -803,6 +849,16 @@ class PLIParser:
                 self._err("line %d: unknown procedure attribute %r"
                           % (p.lineno(1), p[1]))
             p[0] = ("RECURSIVE", True)
+
+    def p_entry_stmt(self, p):
+        "entry_stmt : ENTRYKW proc_attr_list SEMI"
+        params, returns = [], None
+        for kind, val in p[2]:
+            if kind == "PARAMS":
+                params = val
+            elif kind == "RETURNS":
+                returns = val
+        p[0] = N.EntryStmt(params, returns, lineno=p.lineno(1))
 
     def p_begin_stmt(self, p):
         "begin_stmt : BEGIN SEMI stmt_list END opt_id SEMI"

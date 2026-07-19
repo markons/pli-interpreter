@@ -54,6 +54,21 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
   byte overlay; UNSPEC works per-scalar via struct. BY NAME,
   DO REPEAT, REGIONAL files, cross-sections A(*,2): unsupported.
+- v0.5.0 additions: CHECK prefixes (interp.checked set, hook in
+  assign_target, default print / ON CHECK raise); ONSOURCE/ONCHAR
+  pseudo-vars + CONVERSION retry (interp._convert loop dispatches the
+  ON-unit inline, c.fixed flag; assignment contexts only); ENTRY
+  statement (SecondaryEntry subclass of Procedure with start index,
+  registered in _register_proc; exec_block gained start=); BY NAME
+  (Assign.byname attr); aggregate expressions (_array_binop +
+  _apply_scalar_op; comparisons/bitops on arrays rejected);
+  cross-sections via '*' in sub_list (PLIArray.cross_get/cross_set);
+  SYSPRINT paging (line_no/page_size, ENDPAGE dispatched INLINE from
+  _newline so the PUT resumes, LINENO/COUNT builtins, OPEN
+  FILE(SYSPRINT) PAGESIZE(n)). GRAMMAR LESSON: the 0.3 format-rep
+  rules were ambiguous (NUMBER '(' could be group or (expr)-count);
+  restructured as format_rep_body where '(' after a count is always a
+  group — adding unrelated rules can flip LALR conflict resolution.
 - v0.4.0 additions: multiple assignment (Assign.target may be a list);
   DISPLAY/REPLY (reads stdin line); STATIC retention via
   interp.static_store keyed by id(DeclItem); GET COPY (echo) and

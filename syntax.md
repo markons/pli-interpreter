@@ -1,4 +1,4 @@
-# Formal syntax of the pli interpreter (v0.4.0)
+# Formal syntax of the pli interpreter (v0.5.0)
 
 This is the grammar actually implemented by `pli/lexer.py` and
 `pli/parser.py` (the nonterminal names below match the yacc rules), in
@@ -81,8 +81,9 @@ full list = `reserved` table in `pli/lexer.py`).
 <stmt_list>     ::= { <stmt> }
 
 <stmt>          ::= ID ':' <stmt>                          (* label *)
-                  | '(' <id_list> ')' ':' <stmt>           (* condition prefix *)
+                  | '(' <prefix_item> { ',' <prefix_item> } ')' ':' <stmt>
                   | <simple_stmt>
+<prefix_item>   ::= ID [ '(' <id_list> ')' ]     (* e.g. NOSIZE, CHECK(A,B) *)
 
 <simple_stmt>   ::= <proc_stmt>    | <begin_stmt>  | <decl_stmt>
                   | <assign_stmt>  | <call_stmt>   | <if_stmt>
@@ -167,14 +168,19 @@ full list = `reserved` table in `pli/lexer.py`).
 
 ```
 <assign_stmt>   ::= <ref> { ',' <ref> } '=' <expr> ';'
+                  | <ref> '=' <expr> ',' 'BY' 'NAME' ';'
                     (* multiple assignment: the expression is evaluated
                        once, then assigned to each target left to
-                       right.  <ref> may be a pseudo-variable:
-                       SUBSTR(...) or UNSPEC(...) as target *)
+                       right.  BY NAME: structure assignment matching
+                       member names.  <ref> may be a pseudo-variable:
+                       SUBSTR(...), UNSPEC(...), ONSOURCE or ONCHAR
+                       as target *)
 
-<ref>           ::= ID [ '(' <expr_list> ')' ]
-                  | <ref> '.'  ID [ '(' <expr_list> ')' ]  (* member    *)
-                  | <ref> '->' ID [ '(' <expr_list> ')' ]  (* pointer   *)
+<ref>           ::= ID [ '(' <sub_list> ')' ]
+                  | <ref> '.'  ID [ '(' <sub_list> ')' ]   (* member    *)
+                  | <ref> '->' ID [ '(' <sub_list> ')' ]   (* pointer   *)
+<sub_list>      ::= <sub> { ',' <sub> }
+<sub>           ::= <expr> | '*'          (* '*' = array cross-section *)
 
 <call_stmt>     ::= 'CALL' ID [ '(' [ <expr_list> ] ')' ] { <call_opt> } ';'
 <call_opt>      ::= ID '(' <expr> ')'          (* TASK | EVENT | PRIORITY *)
@@ -215,6 +221,11 @@ full list = `reserved` table in `pli/lexer.py`).
 
 <display_stmt>  ::= 'DISPLAY' '(' <expr> ')' [ 'REPLY' '(' <ref> ')' ] ';'
 
+<entry_stmt>    ::= 'ENTRY' { <proc_attr> } ';'
+                    (* labeled, at the top level of a procedure body:
+                       a secondary entry point.  DCL x ENTRY [...] is
+                       accepted as a descriptive declaration. *)
+
 <wait_stmt>     ::= 'WAIT' '(' <ref_list> ')' [ '(' <expr> ')' ] ';'
 
 <execsql_stmt>  ::= EXECSQL                    (* see section 7 *)
@@ -244,13 +255,15 @@ full list = `reserved` table in `pli/lexer.py`).
                   | 'COPY'                       (* echo input to SYSPRINT *)
 
 <format_list>   ::= <format_item> { ',' <format_item> }
-<format_item>   ::= ID [ '(' <expr_list> ')' ]     (* A B F E X COL(UMN) R *)
+<format_item>   ::= <format_basic>
+                  | ( NUMBER | '(' <expr> ')' ) <format_rep_body>
+<format_rep_body> ::= <format_basic>
+                  | '(' <format_list> ')'
+                    (* after a repetition count, '(' always opens a
+                       format group *)
+<format_basic>  ::= ID [ '(' <expr_list> ')' ]     (* A B F E X COL(UMN) R *)
                   | 'SKIP' [ '(' <expr> ')' ]
                   | ID STRING                      (* P'picture'           *)
-                  | NUMBER <format_item>           (* repetition           *)
-                  | NUMBER '(' <format_list> ')'   (* repeated group       *)
-                  | '(' <expr> ')' <format_item>
-                  | '(' <expr> ')' '(' <format_list> ')'
 
 <format_stmt>   ::= 'FORMAT' '(' <format_list> ')' ';'
                     (* must be labeled; referenced by R(label) *)
@@ -384,6 +397,22 @@ they contain).
 - Condition prefixes are honored for `(NOSIZE):` (silent truncation)
   and `(NOSTRINGRANGE):` (SUBSTR clamps its arguments), scoped to the
   prefixed statement.  `SUBSCRIPTRANGE` checking can not be disabled.
+- `(CHECK(A,B)):` monitors assignments to the listed variables within
+  the prefixed statement; the default action prints `A=value;`, an
+  established `ON CHECK(x)` unit overrides it.
+- Assigning `ONSOURCE`/`ONCHAR` inside an `ON CONVERSION` unit and
+  returning normally retries the conversion with the corrected string
+  (assignment contexts; expression-level CONVERSION aborts the
+  statement as before).
+- Elementwise aggregate expressions cover `+ - * / ** ||` and prefix
+  `+ -` on arrays (matching extents or scalar broadcast); comparisons
+  and `& |` on arrays are not supported.  Cross-sections use `'*'`
+  subscripts.
+- `ENDPAGE` is raised on SYSPRINT page overflow (default page size 60;
+  `OPEN FILE(SYSPRINT) PAGESIZE(n)` changes it); the interrupted PUT
+  resumes after the ON-unit returns.  `LINENO` and `COUNT` builtins
+  report the current page line and the items moved by the last
+  completed GET/PUT.
 - `STATIC` variables retain their values across procedure invocations;
   `INITIAL` on them applies once.
 - Inside ON-units the niladic builtins `ONLOC` (raising procedure),

@@ -49,6 +49,7 @@ reserved = {
     "DELETE": "DELETE",
     "WAIT": "WAIT",
     "DISPLAY": "DISPLAY",
+    "ENTRY": "ENTRYKW",
 }
 
 tokens = [

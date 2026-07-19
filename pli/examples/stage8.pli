@@ -1,0 +1,73 @@
+/* v0.5.0: CHECK, ONSOURCE/ONCHAR conversion retry, ENTRY statement,
+   BY NAME, aggregate expressions, cross-sections, PRINT paging       */
+S8: PROC OPTIONS(MAIN);
+   DCL A(5) FIXED INIT(1, 2, 3, 4, 5);
+   DCL B(5) FIXED INIT((5)10);
+   DCL C(5) FIXED;
+   DCL M(2,3) FIXED INIT(1, 2, 3, 4, 5, 6);
+   DCL ROW(3) FIXED;
+   DCL 1 SRC, 2 ID FIXED INIT(7), 2 NAME CHAR(6) INIT('MILES'),
+              2 EXTRA FLOAT INIT(2.5);
+   DCL 1 DST, 2 NAME CHAR(6), 2 ID FIXED, 2 SPARE FIXED INIT(0);
+   DCL X FIXED;
+   DCL BAD CHAR(5) INIT('1X3');
+   DCL (I, T) FIXED;
+
+   /* ---- aggregate expressions ---- */
+   C = A + B;                     /* elementwise            */
+   PUT LIST('A+B      =', C);
+   C = A * 2 + 1;                 /* scalar broadcast       */
+   PUT SKIP LIST('A*2+1    =', C);
+   C = -A;
+   PUT SKIP LIST('-A       =', C);
+   PUT SKIP LIST('SUM(A+B) =', SUM(A + B));
+
+   /* ---- cross-sections ---- */
+   ROW = M(2, *);                 /* second row             */
+   PUT SKIP LIST('M(2,*)   =', ROW);
+   M(*, 1) = 0;                   /* zero first column      */
+   PUT SKIP LIST('M zeroed =', M);
+
+   /* ---- BY NAME ---- */
+   DST = SRC, BY NAME;            /* matches NAME and ID    */
+   PUT SKIP LIST('BY NAME  =', DST.NAME, DST.ID, DST.SPARE);
+
+   /* ---- CHECK prefix: default action prints each change ---- */
+   PUT SKIP LIST('CHECK trace:');
+   PUT SKIP;
+   (CHECK(T)): DO I = 1 TO 3;
+      T = T + I;
+   END;
+
+   /* ---- ON CONVERSION with ONSOURCE fix + retry ---- */
+   ON CONVERSION BEGIN;
+      PUT SKIP LIST('fixing bad char', ONCHAR, 'in', ONSOURCE);
+      ONCHAR = '2';
+   END;
+   X = BAD;                       /* '1X3' -> fixed to '123' */
+   PUT SKIP LIST('converted =', X);
+   REVERT CONVERSION;
+
+   /* ---- ENTRY: two ways into one procedure ---- */
+   PUT SKIP LIST('AREA2(5)  =', AREA2(5));
+   PUT SKIP LIST('PERIM(5)  =', PERIM(5));
+
+   /* ---- paging: PAGESIZE + ENDPAGE + LINENO/COUNT ---- */
+   OPEN FILE(SYSPRINT) PAGESIZE(18);
+   ON ENDPAGE(SYSPRINT) BEGIN;
+      PUT PAGE LIST('--- page header (via ENDPAGE) ---');
+      PUT SKIP;
+   END;
+   DO I = 1 TO 6;
+      PUT SKIP LIST('report line', I, 'lineno =', LINENO);
+   END;
+   PUT SKIP LIST('items in last PUT (COUNT) =', COUNT);
+
+AREA2: PROC(N) RETURNS(FIXED);    /* primary entry: area     */
+   DCL N FIXED;
+   RETURN(N * N);
+PERIM: ENTRY(N) RETURNS(FIXED);   /* secondary entry         */
+   RETURN(4 * N);
+END AREA2;
+
+END S8;
