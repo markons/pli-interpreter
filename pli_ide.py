@@ -189,8 +189,11 @@ class PLIIDE(tk.Tk):
         ttk.Button(bar, text="Stop",
                    command=self.stop_program).pack(side="left", padx=2)
 
-        # editor + bottom notebook in a vertical paned window
-        paned = ttk.PanedWindow(self, orient="vertical")
+        # editor + bottom notebook in a vertical paned window; the
+        # classic tk.PanedWindow gives a visible, grabbable sash
+        paned = tk.PanedWindow(self, orient="vertical", sashwidth=6,
+                               sashrelief="raised", opaqueresize=True,
+                               background="#d0d0d0")
         paned.pack(fill="both", expand=True)
 
         edframe = ttk.Frame(paned)
@@ -221,7 +224,7 @@ class PLIIDE(tk.Tk):
         self.find_var = tk.StringVar()
         self.replace_var = tk.StringVar()
         self.case_var = tk.BooleanVar(value=False)
-        paned.add(edframe, weight=3)
+        paned.add(edframe, stretch="always", minsize=120)
 
         nb = ttk.Notebook(paned)
         self.errors = tk.Listbox(nb, font=FONT, foreground="#b00000")
@@ -257,7 +260,7 @@ class PLIIDE(tk.Tk):
         self.notebook = nb
         self.reader = None
         self._waiting_input = False
-        paned.add(nb, weight=1)
+        paned.add(nb, stretch="middle", minsize=100)
 
         self.status = ttk.Label(self, text="ready", anchor="w")
         self.status.pack(fill="x")
