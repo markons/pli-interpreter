@@ -169,6 +169,12 @@ class PLIIDE(tk.Tk):
         m_edit.add_command(label="Find Next", accelerator="F3",
                            command=self.find_next)
         menu.add_cascade(label="Edit", menu=m_edit)
+        self.crosshair_var = tk.BooleanVar(value=True)
+        m_view = tk.Menu(menu, tearoff=0)
+        m_view.add_checkbutton(label="Crosshair (ISPF style)",
+                               variable=self.crosshair_var,
+                               command=self._update_crosshair)
+        menu.add_cascade(label="View", menu=m_view)
         m_run = tk.Menu(menu, tearoff=0)
         m_run.add_command(label="Compile", command=self.compile_program,
                           accelerator="F7")
@@ -215,6 +221,12 @@ class PLIIDE(tk.Tk):
         self.editor.tag_raise("errline")
         self.editor.tag_configure("search_hit", background="#ffe97a")
         self.editor.tag_raise("search_hit")
+        # ISPF-style crosshair: row band, column band, intersection cell;
+        # kept at the lowest priority so every other highlight wins
+        self.editor.tag_configure("xhair", background="#e9e9f6")
+        self.editor.tag_configure("xcell", background="#d4d4ee")
+        self.editor.tag_lower("xcell")
+        self.editor.tag_lower("xhair")
         # the built-in selection must outrank every highlight tag,
         # otherwise selecting text inside a highlighted region is
         # invisible and the region's own background wins
@@ -289,10 +301,12 @@ class PLIIDE(tk.Tk):
     def _yview_both(self, *args):
         self.editor.yview(*args)
         self.linenos.yview(*args)
+        self._update_crosshair()
 
     def _on_editor_scroll(self, first, last):
         self.yscroll.set(first, last)
         self.linenos.yview_moveto(first)
+        self._update_crosshair()
 
     def _on_modified(self, event=None):
         self.editor.edit_modified(False)
@@ -355,6 +369,36 @@ class PLIIDE(tk.Tk):
             else "(untitled)"
         self.status.config(text="%s   line %s, col %d"
                            % (base, line, int(col) + 1))
+        self._update_crosshair()
+
+    def _update_crosshair(self, event=None):
+        """ISPF-style crosshair at the insert cursor: highlight the
+        current line, the current column on all visible lines, and the
+        intersection cell."""
+        ed = self.editor
+        ed.tag_remove("xhair", "1.0", "end")
+        ed.tag_remove("xcell", "1.0", "end")
+        if not self.crosshair_var.get():
+            return
+        line, col = map(int, ed.index("insert").split("."))
+        ed.tag_add("xhair", "%d.0" % line, "%d.0 lineend" % line)
+        try:
+            first = int(ed.index("@0,0").split(".")[0])
+            last = int(ed.index("@0,%d" % max(ed.winfo_height(), 1))
+                       .split(".")[0])
+        except tk.TclError:
+            return
+        for ln in range(first, last + 1):
+            if ln == line:
+                continue
+            length = int(ed.index("%d.end" % ln).split(".")[1])
+            if col < length:
+                ed.tag_add("xhair", "%d.%d" % (ln, col),
+                           "%d.%d" % (ln, col + 1))
+        length = int(ed.index("%d.end" % line).split(".")[1])
+        if col < length:
+            ed.tag_add("xcell", "%d.%d" % (line, col),
+                       "%d.%d" % (line, col + 1))
 
     def _retitle(self):
         name = self.filename or "(untitled)"
