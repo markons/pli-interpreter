@@ -212,6 +212,10 @@ class PLIIDE(tk.Tk):
         self.editor.tag_raise("errline")
         self.editor.tag_configure("search_hit", background="#ffe97a")
         self.editor.tag_raise("search_hit")
+        # the built-in selection must outrank every highlight tag,
+        # otherwise selecting text inside a highlighted region is
+        # invisible and the region's own background wins
+        self.editor.tag_raise("sel")
         self._hl_job = None
         self.find_dialog = None
         self.find_var = tk.StringVar()
