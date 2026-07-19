@@ -274,8 +274,14 @@ class PLIIDE(tk.Tk):
         self._waiting_input = False
         paned.add(nb, stretch="middle", minsize=100)
 
-        self.status = ttk.Label(self, text="ready", anchor="w")
-        self.status.pack(fill="x")
+        statusbar = ttk.Frame(self)
+        statusbar.pack(fill="x")
+        self.status = ttk.Label(statusbar, text="ready", anchor="w")
+        self.status.pack(side="left", fill="x", expand=True)
+        self.pos_label = ttk.Label(statusbar, text=" line 1, col 1 ",
+                                   anchor="e", font=FONT,
+                                   relief="sunken")
+        self.pos_label.pack(side="right", padx=6, pady=1)
 
         self.editor.bind("<<Modified>>", self._on_modified)
         self.editor.bind("<KeyRelease>", self._update_status)
@@ -365,10 +371,8 @@ class PLIIDE(tk.Tk):
 
     def _update_status(self, event=None):
         line, col = self.editor.index("insert").split(".")
-        base = os.path.basename(self.filename) if self.filename \
-            else "(untitled)"
-        self.status.config(text="%s   line %s, col %d"
-                           % (base, line, int(col) + 1))
+        self.pos_label.config(text=" line %s, col %d " % (line,
+                                                          int(col) + 1))
         self._update_crosshair()
 
     def _update_crosshair(self, event=None):
