@@ -102,6 +102,10 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
 - Edits: BOM/invisible chars break Edit-tool matching; use chr(0xFEFF).
 
 ## Conventions
+- DO NOT commit/push until the owner has personally tested the change
+  and approved (rule set 2026-07-19 after a GUI fix passed headless
+  tests but was still broken on screen). Make change -> automated
+  tests -> STOP and ask owner to test -> then commit+push.
 - Commits: imperative summary + body, footer
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`; push to main.
 - Every feature lands with: example under pli/examples/, scripted test,

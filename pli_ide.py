@@ -195,6 +195,18 @@ class PLIIDE(tk.Tk):
         ttk.Button(bar, text="Stop",
                    command=self.stop_program).pack(side="left", padx=2)
 
+        # status bar FIRST, anchored to the bottom edge: widgets packed
+        # earlier keep their space, so the bar can never be clipped away
+        # by the expanding editor area
+        statusbar = ttk.Frame(self)
+        statusbar.pack(side="bottom", fill="x")
+        self.status = ttk.Label(statusbar, text="ready", anchor="w")
+        self.status.pack(side="left", fill="x", expand=True)
+        self.pos_label = ttk.Label(statusbar, text=" line 1, col 1 ",
+                                   anchor="e", font=FONT,
+                                   relief="sunken")
+        self.pos_label.pack(side="right", padx=6, pady=1)
+
         # editor + bottom notebook in a vertical paned window; the
         # classic tk.PanedWindow gives a visible, grabbable sash
         paned = tk.PanedWindow(self, orient="vertical", sashwidth=6,
@@ -273,15 +285,6 @@ class PLIIDE(tk.Tk):
         self.reader = None
         self._waiting_input = False
         paned.add(nb, stretch="middle", minsize=100)
-
-        statusbar = ttk.Frame(self)
-        statusbar.pack(fill="x")
-        self.status = ttk.Label(statusbar, text="ready", anchor="w")
-        self.status.pack(side="left", fill="x", expand=True)
-        self.pos_label = ttk.Label(statusbar, text=" line 1, col 1 ",
-                                   anchor="e", font=FONT,
-                                   relief="sunken")
-        self.pos_label.pack(side="right", padx=6, pady=1)
 
         self.editor.bind("<<Modified>>", self._on_modified)
         self.editor.bind("<KeyRelease>", self._update_status)
