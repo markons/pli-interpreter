@@ -184,13 +184,23 @@ class PLIParser:
                 | io_stmt
                 | wait_stmt
                 | execsql_stmt
+                | display_stmt
                 | proc_stmt
                 | begin_stmt"""
         p[0] = p[1]
 
     def p_assign_stmt(self, p):
-        "assign_stmt : ref EQ expr SEMI"
-        p[0] = N.Assign(p[1], p[3], lineno=p[1].lineno)
+        """assign_stmt : ref EQ expr SEMI
+                       | ref COMMA target_list EQ expr SEMI"""
+        if len(p) == 5:
+            p[0] = N.Assign(p[1], p[3], lineno=p[1].lineno)
+        else:
+            p[0] = N.Assign([p[1]] + p[3], p[5], lineno=p[1].lineno)
+
+    def p_target_list(self, p):
+        """target_list : target_list COMMA ref
+                       | ref"""
+        p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
 
     def p_ref(self, p):
         """ref : ID
@@ -236,6 +246,17 @@ class PLIParser:
     def p_execsql_stmt(self, p):
         "execsql_stmt : EXECSQL"
         p[0] = N.ExecSql(p[1], lineno=p.lineno(1))
+
+    def p_display_stmt(self, p):
+        """display_stmt : DISPLAY LPAREN expr RPAREN SEMI
+                        | DISPLAY LPAREN expr RPAREN ID LPAREN ref RPAREN SEMI"""
+        reply = None
+        if len(p) == 10:
+            if p[5] != "REPLY":
+                self._err("line %d: expected REPLY, found %r"
+                          % (p.lineno(5), p[5]))
+            reply = p[7]
+        p[0] = N.Display(p[3], reply, lineno=p.lineno(1))
 
     def p_wait_stmt(self, p):
         """wait_stmt : WAIT LPAREN ref_list RPAREN SEMI
@@ -521,14 +542,23 @@ class PLIParser:
 
     def p_alloc_item(self, p):
         """alloc_item : ID
-                      | ID ID LPAREN ref RPAREN"""
+                      | ID ID LPAREN ref RPAREN
+                      | ID LPAREN bound_list RPAREN
+                      | ID LPAREN bound_list RPAREN ID LPAREN ref RPAREN"""
         if len(p) == 2:
-            p[0] = (p[1], None)
-        else:
+            p[0] = (p[1], None, None)
+        elif len(p) == 6 and p.slice[2].type == "ID":
             if p[2] != "SET":
                 self._err("line %d: expected SET, found %r"
                           % (p.lineno(2), p[2]))
-            p[0] = (p[1], p[4])
+            p[0] = (p[1], p[4], None)
+        elif len(p) == 5:
+            p[0] = (p[1], None, p[3])
+        else:
+            if p[5] != "SET":
+                self._err("line %d: expected SET, found %r"
+                          % (p.lineno(5), p[5]))
+            p[0] = (p[1], p[7], p[3])
 
     def p_free_stmt(self, p):
         "free_stmt : FREE id_list SEMI"
@@ -689,6 +719,12 @@ class PLIParser:
     def p_get_clause_file(self, p):
         "get_clause : FILE LPAREN ID RPAREN"
         p[0] = ("FILE", p[3])
+
+    def p_get_clause_copy(self, p):
+        "get_clause : ID"
+        if p[1] != "COPY":
+            self._err("line %d: unknown GET option %r" % (p.lineno(1), p[1]))
+        p[0] = ("COPY", None)
 
     def p_ref_list(self, p):
         """ref_list : ref_list COMMA ref

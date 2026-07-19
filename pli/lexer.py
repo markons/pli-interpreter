@@ -48,6 +48,7 @@ reserved = {
     "READ": "READ", "WRITE": "WRITE", "REWRITE": "REWRITE",
     "DELETE": "DELETE",
     "WAIT": "WAIT",
+    "DISPLAY": "DISPLAY",
 }
 
 tokens = [

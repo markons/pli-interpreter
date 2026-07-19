@@ -1,0 +1,74 @@
+/* v0.4.0: multiple assignment, DISPLAY/REPLY, STATIC retention,
+   GET STRING EDIT, (NOSIZE)/(NOSTRINGRANGE) prefixes, ALLOCATE with
+   bounds, ONLOC / ONFILE                                            */
+S7: PROC OPTIONS(MAIN);
+   DCL (A, B, C) FIXED;
+   DCL SMALL FIXED(3);
+   DCL NAME CHAR(10) VARYING;
+   DCL S    CHAR(10) VARYING;
+   DCL (X, Y, I) FIXED;
+   DCL EOF BIT(1) INIT('0'B);
+
+   /* multiple assignment */
+   A, B, C = 41;
+   A, B = A + 1;
+   PUT LIST('A B C =', A, B, C);
+
+   /* STATIC: N survives between calls */
+   CALL COUNTER; CALL COUNTER; CALL COUNTER;
+
+   /* (NOSIZE): silent truncation; without it SIZE is raised */
+   (NOSIZE): SMALL = 12345;
+   PUT SKIP LIST('NOSIZE truncated:', SMALL);
+   ON SIZE PUT SKIP LIST('SIZE raised as usual');
+   SMALL = 54321;
+
+   /* (NOSTRINGRANGE): SUBSTR clamps instead of raising */
+   (NOSTRINGRANGE): PUT SKIP LIST('clamped:', SUBSTR('HELLO', 3, 99));
+
+   /* GET STRING ... EDIT */
+   GET STRING('ABCD1234') EDIT(S, X) (A(4), F(4));
+   PUT SKIP LIST('from string:', S, X);
+
+   /* CONTROLLED with bounds given at ALLOCATE time */
+   BEGIN;
+      DCL V FIXED CONTROLLED;
+      ALLOCATE V(5);
+      DO I = 1 TO HBOUND(V);
+         V(I) = I * I;
+      END;
+      PUT SKIP LIST('squares:', V);
+      FREE V;
+   END;
+
+   /* DISPLAY with operator REPLY */
+   DISPLAY('WHO ARE YOU?') REPLY(NAME);
+   PUT SKIP LIST('hello,', NAME);
+
+   /* ONLOC: which procedure raised the condition */
+   ON ZERODIVIDE PUT SKIP LIST('zerodivide inside', ONLOC);
+   CALL DIVZERO;
+
+   /* ONFILE via ENDFILE */
+   ON ENDFILE(SYSIN) BEGIN;
+      PUT SKIP LIST('endfile on file:', ONFILE);
+      EOF = '1'B;
+   END;
+   DO WHILE(^EOF);
+      GET LIST(Y);
+      IF ^EOF THEN PUT SKIP LIST('read', Y);
+   END;
+   PUT SKIP LIST('done.');
+
+COUNTER: PROC;
+   DCL N FIXED STATIC INIT(0);
+   N = N + 1;
+   PUT SKIP LIST('counter call #', N);
+END COUNTER;
+
+DIVZERO: PROC;
+   DCL Z FLOAT;
+   Z = 1 / 0;
+END DIVZERO;
+
+END S7;

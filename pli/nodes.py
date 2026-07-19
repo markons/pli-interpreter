@@ -41,7 +41,8 @@ UnOp = _mk("UnOp", "op", "operand")
 
 # ---- statements ------------------------------------------------------
 Labeled = _mk("Labeled", "name", "stmt")
-Assign = _mk("Assign", "target", "value")           # target is a Ref
+Assign = _mk("Assign", "target", "value")   # target: Ref or [Ref,...]
+                                            # (multiple assignment)
 CallStmt = _mk("CallStmt", "name", "args", "opts")  # opts: [(NAME, expr)]
 If = _mk("If", "cond", "then", "els")               # els may be None
 Block = _mk("Block", "body")                        # plain DO; ... END;
@@ -61,6 +62,7 @@ IOStmt = _mk("IOStmt", "verb", "opts")  # OPEN/CLOSE/READ/WRITE/REWRITE/DELETE
                                         # opts: [(NAME, expr-or-None), ...]
 WaitStmt = _mk("WaitStmt", "refs", "count")
 ExecSql = _mk("ExecSql", "text")        # EXEC SQL ... ; (opaque SQL text)
+Display = _mk("Display", "value", "reply")  # DISPLAY(e) [REPLY(ref)]
 Put = _mk("Put", "clauses")     # clauses: [("PAGE",)|("SKIP",n)|("LIST",items)
                                 #           |("EDIT",items,formats)]
 Get = _mk("Get", "clauses")     # clauses: [("SKIP",n)|("LIST",refs)]

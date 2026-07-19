@@ -1,4 +1,4 @@
-# Formal syntax of the pli interpreter (v0.3.0)
+# Formal syntax of the pli interpreter (v0.4.0)
 
 This is the grammar actually implemented by `pli/lexer.py` and
 `pli/parser.py` (the nonterminal names below match the yacc rules), in
@@ -166,9 +166,11 @@ full list = `reserved` table in `pli/lexer.py`).
 ## 4. Executable statements
 
 ```
-<assign_stmt>   ::= <ref> '=' <expr> ';'
-                    (* <ref> may be a pseudo-variable: SUBSTR(...) or
-                       UNSPEC(...) as target *)
+<assign_stmt>   ::= <ref> { ',' <ref> } '=' <expr> ';'
+                    (* multiple assignment: the expression is evaluated
+                       once, then assigned to each target left to
+                       right.  <ref> may be a pseudo-variable:
+                       SUBSTR(...) or UNSPEC(...) as target *)
 
 <ref>           ::= ID [ '(' <expr_list> ')' ]
                   | <ref> '.'  ID [ '(' <expr_list> ')' ]  (* member    *)
@@ -206,8 +208,12 @@ full list = `reserved` table in `pli/lexer.py`).
 
 <allocate_stmt> ::= ( 'ALLOCATE' | 'ALLOC' ) <alloc_item>
                         { ',' <alloc_item> } ';'
-<alloc_item>    ::= ID [ 'SET' '(' <ref> ')' ]
+<alloc_item>    ::= ID [ '(' <bound_list> ')' ] [ 'SET' '(' <ref> ')' ]
+                    (* bounds re-specify CONTROLLED extents at
+                       allocation time: ALLOCATE A(N); *)
 <free_stmt>     ::= 'FREE' <id_list> ';'
+
+<display_stmt>  ::= 'DISPLAY' '(' <expr> ')' [ 'REPLY' '(' <ref> ')' ] ';'
 
 <wait_stmt>     ::= 'WAIT' '(' <ref_list> ')' [ '(' <expr> ')' ] ';'
 
@@ -233,8 +239,9 @@ full list = `reserved` table in `pli/lexer.py`).
                   | 'LIST' '(' <ref_list> ')'
                   | 'EDIT' '(' <ref_list> ')' '(' <format_list> ')'
                   | 'DATA' [ '(' <ref_list> ')' ]
-                  | 'STRING' '(' <expr> ')'
+                  | 'STRING' '(' <expr> ')'      (* with LIST or EDIT *)
                   | 'FILE' '(' ID ')'
+                  | 'COPY'                       (* echo input to SYSPRINT *)
 
 <format_list>   ::= <format_item> { ',' <format_item> }
 <format_item>   ::= ID [ '(' <expr_list> ')' ]     (* A B F E X COL(UMN) R *)
@@ -374,4 +381,11 @@ they contain).
   (`ONCODE`, `DATE`, `NULL`, ...) without parentheses, and the
   distinction array-element vs. function call are resolved
   semantically, not syntactically.
-- Condition prefixes are parsed; checking is always enabled.
+- Condition prefixes are honored for `(NOSIZE):` (silent truncation)
+  and `(NOSTRINGRANGE):` (SUBSTR clamps its arguments), scoped to the
+  prefixed statement.  `SUBSCRIPTRANGE` checking can not be disabled.
+- `STATIC` variables retain their values across procedure invocations;
+  `INITIAL` on them applies once.
+- Inside ON-units the niladic builtins `ONLOC` (raising procedure),
+  `ONFILE` (file name) and `ONKEY` (key of a KEY condition) are
+  available in addition to `ONCODE`/`ONCHAR`/`ONSOURCE`.

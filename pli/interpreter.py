@@ -474,9 +474,17 @@ def convert(value, decl):
                 mant = math.trunc(float(n) * 10 ** q)
                 return FixedDec(mant, p or 15, q).to_precision(p or 15, q)
             except (SizeError, FixedOverflow) as e:
+                if "SIZE" in _DISABLED:      # (NOSIZE): silent truncation
+                    m = math.trunc(float(n) * 10 ** q)
+                    keep = 10 ** (p or 15)
+                    m = (abs(m) % keep) * (1 if m >= 0 else -1)
+                    return FixedDec(m, p or 15, q)
                 raise PLICondition("SIZE", str(e))
         i = int(n)  # PL/I fixed assignment truncates toward zero
         if p is not None and len(str(abs(i))) > p:
+            if "SIZE" in _DISABLED:
+                keep = 10 ** p
+                return (abs(i) % keep) * (1 if i >= 0 else -1)
             raise PLICondition("SIZE", "%r does not fit FIXED(%d)" % (i, p))
         return i
     if decl.base == "FLOAT":
@@ -565,6 +573,14 @@ def unspec_decode(bits, decl):
     raise PLIError("UNSPEC pseudo-variable: unsupported target type")
 
 
+# conditions currently disabled by (NOxxx): prefixes.  SIZE disabled =
+# silent truncation; STRINGRANGE disabled = SUBSTR clamps its arguments.
+# (SUBSCRIPTRANGE stays always-checked: wild stores are never allowed.)
+_DISABLED = set()
+_PREFIXABLE = {"SIZE", "STRINGRANGE", "SUBSCRIPTRANGE", "ZERODIVIDE",
+               "FIXEDOVERFLOW", "OVERFLOW", "UNDERFLOW", "CONVERSION",
+               "CHECK"}
+
 LIST_TABS = 24  # PUT LIST tab stop interval (columns 1, 25, 49, ...)
 
 
@@ -580,6 +596,7 @@ class Interpreter:
         self.cond_frames = []    # ON-unit frames, one per proc/begin activation
         self.current_cond = None # last raised condition (ONCODE etc.)
         self.string_input = False  # GET STRING in progress
+        self.copy_input = False    # GET ... COPY echo
         self.in_line = ""        # raw line buffer for GET EDIT
         self.in_pos = 0
         self.tasks = []          # attached task threads
@@ -587,6 +604,8 @@ class Interpreter:
         self.sqlrt = None        # lazy SqlRuntime (EXEC SQL support)
         self.global_env = None
         self.include_dir = "."
+        self.static_store = {}   # id(DeclItem) -> retained STATIC entry
+        self.proc_stack = []     # names of active procedures (ONLOC)
 
     def password_prompt(self, prompt):
         """Ask the user for a database password; the IDE overrides this."""
@@ -658,6 +677,7 @@ class Interpreter:
         self._hoist_procs(node.body, env)
         self._hoist_labels(node.body, env)
         self.cond_frames.append({})
+        self.proc_stack.append(proc.name)
         try:
             self.exec_block(node.body, env)
         except ReturnSignal as r:
@@ -667,6 +687,7 @@ class Interpreter:
             return value
         finally:
             self.cond_frames.pop()
+            self.proc_stack.pop()
         return None
 
     def _hoist_labels(self, body, env):
@@ -747,6 +768,8 @@ class Interpreter:
         to ERROR; unhandled ERROR terminates the program.
         """
         self.current_cond = cond
+        if not getattr(cond, "loc", ""):
+            cond.loc = self.proc_stack[-1] if self.proc_stack else ""
         for frame in reversed(self.cond_frames):
             handler = frame.get((cond.name, cond.qual),
                                 frame.get((cond.name, None)))
@@ -873,6 +896,12 @@ class Interpreter:
                 if vals and vals[0] is not None:
                     existing.value = convert(self.eval(vals[0], env), decl)
             return
+        if "STATIC" in kinds:
+            key = (id(item), name)
+            if key not in self.static_store:
+                self.static_store[key] = self._make_entry(name, item, env)
+            env.declare(name, self.static_store[key])
+            return
         env.declare(name, self._make_entry(name, item, env))
 
     def _expand_init(self, items, env):
@@ -917,6 +946,18 @@ class Interpreter:
     # -- structures -------------------------------------------------------
 
     def _declare_structure(self, root, subitems, env):
+        name = root.names[0]
+        if any(k == "STATIC" for k, _ in root.attrs):
+            key = (id(root), name)
+            if key not in self.static_store:
+                self._declare_structure_inner(root, subitems, env)
+                self.static_store[key] = env.vars[name]
+            else:
+                env.declare(name, self.static_store[key])
+            return
+        self._declare_structure_inner(root, subitems, env)
+
+    def _declare_structure_inner(self, root, subitems, env):
         name = root.names[0]
         if any(k == "BASED" for k, _ in root.attrs):
             ptr = next(v for k, v in root.attrs if k == "BASED")
@@ -1109,7 +1150,24 @@ class Interpreter:
 
     def exec_Assign(self, stmt, env):
         value = self.eval(stmt.value, env)
-        self.assign_target(stmt.target, value, env)
+        if isinstance(stmt.target, list):     # A, B, C = expr;
+            for t in stmt.target:
+                self.assign_target(t, value, env)
+        else:
+            self.assign_target(stmt.target, value, env)
+
+    def exec_Display(self, stmt, env):
+        text = to_string(self.eval(stmt.value, env))
+        self._flush_line()
+        self._write(text + "\n")
+        if stmt.reply is not None:
+            line = self.stdin.readline()
+            if not line:
+                raise PLICondition("ENDFILE", "end of input on REPLY",
+                                   qual="SYSIN")
+            self.assign_target(stmt.reply,
+                               line.lstrip(chr(0xFEFF)).rstrip("\r\n"),
+                               env)
 
     def assign_target(self, node, value, env):
         if isinstance(node, N.Member):
@@ -1500,9 +1558,21 @@ class Interpreter:
         self.cond_frames[-1].pop((stmt.cond.upper(), stmt.qual), None)
 
     def exec_Prefix(self, stmt, env):
-        # condition prefixes like (SIZE): / (NOSUBSCRIPTRANGE): are parsed
-        # and accepted; checking is always on in this interpreter
-        self.exec_stmt(stmt.stmt, env)
+        """(NOSIZE): / (SIZE): etc. — scoped enable/disable.  Disabled
+        SIZE truncates silently; disabled STRINGRANGE clamps SUBSTR.
+        SUBSCRIPTRANGE remains checked regardless (safety)."""
+        saved = set(_DISABLED)
+        try:
+            for nm in stmt.names:
+                n = nm.upper()
+                if n.startswith("NO") and n[2:] in _PREFIXABLE:
+                    _DISABLED.add(n[2:])
+                elif n in _PREFIXABLE:
+                    _DISABLED.discard(n)
+            self.exec_stmt(stmt.stmt, env)
+        finally:
+            _DISABLED.clear()
+            _DISABLED.update(saved)
 
     def exec_Return(self, stmt, env):
         raise ReturnSignal(self.eval(stmt.value, env)
@@ -1786,29 +1856,38 @@ class Interpreter:
                           None)
         if string_src is not None:
             text = to_string(self.eval(string_src, env))
-            saved, saved_flag = self.input_tokens, self.string_input
+            saved = (self.input_tokens, self.string_input,
+                     self.in_line, self.in_pos)
             self.input_tokens = [t for t in
                                  text.replace(",", " ").split() if t]
+            self.in_line, self.in_pos = text, 0
             self.string_input = True
             try:
                 for clause in stmt.clauses:
                     if clause[0] == "LIST":
                         for ref in clause[1]:
                             self.assign_target(ref, self._next_input(), env)
+                    elif clause[0] == "EDIT":
+                        self._get_edit(clause[1], clause[2], env)
             finally:
-                self.input_tokens, self.string_input = saved, saved_flag
+                (self.input_tokens, self.string_input,
+                 self.in_line, self.in_pos) = saved
             return
-        for clause in stmt.clauses:
-            if clause[0] == "SKIP":
-                self.input_tokens = []
-                self.in_line, self.in_pos = "", 0
-            elif clause[0] == "LIST":
-                for ref in clause[1]:
-                    self.assign_target(ref, self._next_input(), env)
-            elif clause[0] == "DATA":
-                self._get_data(env)
-            elif clause[0] == "EDIT":
-                self._get_edit(clause[1], clause[2], env)
+        self.copy_input = any(c[0] == "COPY" for c in clauses)
+        try:
+            for clause in stmt.clauses:
+                if clause[0] == "SKIP":
+                    self.input_tokens = []
+                    self.in_line, self.in_pos = "", 0
+                elif clause[0] == "LIST":
+                    for ref in clause[1]:
+                        self.assign_target(ref, self._next_input(), env)
+                elif clause[0] == "DATA":
+                    self._get_data(env)
+                elif clause[0] == "EDIT":
+                    self._get_edit(clause[1], clause[2], env)
+        finally:
+            self.copy_input = False
 
     def _get_data(self, env):
         """GET DATA: read NAME=value pairs terminated by a semicolon."""
@@ -1861,11 +1940,19 @@ class Interpreter:
         got = 0
         while got < n:
             if self.in_pos >= len(self.in_line):
+                if self.string_input:
+                    raise PLICondition("ERROR",
+                                       "GET STRING: source string "
+                                       "exhausted")
                 line = self.stdin.readline()
                 if not line:
                     raise PLICondition("ENDFILE",
                                        "end of input file on GET EDIT",
                                        qual="SYSIN")
+                if self.copy_input:
+                    self._flush_line()
+                    self._write(line if line.endswith("\n")
+                                else line + "\n")
                 self.in_line = line.lstrip(chr(0xFEFF)).rstrip("\r\n")
                 self.in_pos = 0
                 continue
@@ -1927,6 +2014,9 @@ class Interpreter:
                 raise PLICondition("ENDFILE", "end of input file on GET",
                                    qual="SYSIN")
             line = line.lstrip(chr(0xFEFF))  # BOM from Windows pipes
+            if self.copy_input:              # GET ... COPY: echo input
+                self._flush_line()
+                self._write(line if line.endswith("\n") else line + "\n")
             self.input_tokens = [t for t in
                                  line.replace(",", " ").split() if t]
         tok = self.input_tokens.pop(0)
@@ -2097,11 +2187,11 @@ class Interpreter:
         return entry
 
     def exec_AllocStmt(self, stmt, env):
-        for name, set_ref in stmt.items:
+        for name, set_ref, bounds in stmt.items:
             entry = env.lookup(name)
             if isinstance(entry, BasedVar):
                 alloc = self._instantiate(entry.name, entry.item,
-                                          entry.subitems, env)
+                                          entry.subitems, env, bounds)
                 ptr_ref = set_ref or entry.ptr_ref
                 if ptr_ref is None:
                     raise PLIError("ALLOCATE %s: no SET pointer" % name)
@@ -2109,16 +2199,28 @@ class Interpreter:
             elif isinstance(entry, Controlled):
                 entry.stack.append(self._instantiate(
                     entry.name, entry.item,
-                    getattr(entry, "subitems", []), env))
+                    getattr(entry, "subitems", []), env, bounds))
             else:
                 raise PLIError("ALLOCATE %s: not BASED or CONTROLLED" % name)
 
-    def _instantiate(self, name, item, subitems, env):
+    def _instantiate(self, name, item, subitems, env, bounds=None):
         if subitems:
             struct = PLIStructure(name)
             struct.spec = (item.level, subitems)
             self._build_members(struct, subitems, 0, item.level, env)
             return struct
+        if bounds is not None:
+            # ALLOCATE A(N): bounds respecified at allocation time
+            decl = self._resolve_attrs(name, item.attrs, env)
+            bl = []
+            for b in bounds:
+                if b == ("*",):
+                    raise PLIError("ALLOCATE %s: '*' bound invalid" % name)
+                lo = 1 if b[0] is None else int(to_number(
+                    self.eval(b[0], env)))
+                hi = int(to_number(self.eval(b[1], env)))
+                bl.append((lo, hi))
+            return PLIArray(bl, decl)
         return self._make_entry(name, item, env)
 
     def exec_FreeStmt(self, stmt, env):
@@ -2226,7 +2328,8 @@ class Interpreter:
                     key = to_string(self.eval(opts["KEY"], env)).strip()
                     if key not in f.index:
                         raise PLICondition("KEY", "key %r not found in %s"
-                                           % (key, f.name), qual=f.name)
+                                           % (key, f.name), qual=f.name,
+                                           source=key)
                     record = f.index[key]
                 else:
                     if f.seq_keys is None:
@@ -2264,7 +2367,7 @@ class Interpreter:
                 key = to_string(self.eval(keyopt, env)).strip()
                 if verb == "REWRITE" and key not in f.index:
                     raise PLICondition("KEY", "key %r not found" % key,
-                                       qual=f.name)
+                                       qual=f.name, source=key)
                 f.index[key] = record
                 f.dirty = True
             else:
@@ -2279,7 +2382,7 @@ class Interpreter:
             key = to_string(self.eval(opts["KEY"], env)).strip()
             if key not in f.index:
                 raise PLICondition("KEY", "key %r not found" % key,
-                                   qual=f.name)
+                                   qual=f.name, source=key)
             del f.index[key]
             f.dirty = True
             return
@@ -2470,7 +2573,8 @@ class Interpreter:
 
 
 _NILADIC_BUILTINS = {"DATE", "TIME", "DATETIME", "ONCODE", "ONCHAR",
-                     "ONSOURCE", "NULL", "RANDOM"}
+                     "ONSOURCE", "ONLOC", "ONFILE", "ONKEY",
+                     "NULL", "RANDOM"}
 _UNEVALUATED_BUILTINS = {"HBOUND", "LBOUND", "DIM", "ADDR", "ALLOCATION"}
 
 _BUILTINS = {
@@ -2480,7 +2584,7 @@ _BUILTINS = {
     "SUBSTR", "LENGTH", "INDEX", "VERIFY", "TRANSLATE", "REPEAT", "COPY",
     "TRIM", "LOWERCASE", "UPPERCASE", "CHAR", "BIT", "FIXED", "FLOAT",
     "BINARY", "DECIMAL", "HBOUND", "LBOUND", "DIM", "DATE", "TIME",
-    "ONCODE", "ONCHAR", "ONSOURCE",
+    "ONCODE", "ONCHAR", "ONSOURCE", "ONLOC", "ONFILE", "ONKEY",
     "NULL", "ADDR", "ALLOCATION", "UNSPEC",
     "REAL", "IMAG", "CONJG", "COMPLEX", "COMPLETION", "STATUS",
     "LEFT", "RIGHT", "CENTER", "CENTRE", "REVERSE", "SEARCH", "SEARCHR",
@@ -2555,9 +2659,13 @@ def builtin_dispatch(interp, name, args, node, env):
         i = int(num(1))
         length = int(num(2)) if len(args) > 2 else len(text) - i + 1
         if i < 1 or length < 0 or i - 1 + length > len(text):
-            raise PLICondition("STRINGRANGE",
-                               "line %d: SUBSTR(%r,%d,%d) out of range"
-                               % (node.lineno, text, i, length))
+            if "STRINGRANGE" in _DISABLED:   # (NOSTRINGRANGE): clamp
+                i = max(i, 1)
+                length = max(0, min(length, len(text) - i + 1))
+            else:
+                raise PLICondition("STRINGRANGE",
+                                   "line %d: SUBSTR(%r,%d,%d) out of range"
+                                   % (node.lineno, text, i, length))
         result = text[i - 1:i - 1 + length]
         return BitStr(result) if isinstance(args[0], BitStr) else result
     if name == "LENGTH":
@@ -2618,6 +2726,10 @@ def builtin_dispatch(interp, name, args, node, env):
         if not isinstance(ref, N.Ref):
             raise PLIError("%s requires an array argument" % name)
         arr = env.lookup(ref.name)
+        if isinstance(arr, Controlled):
+            if not arr.stack:
+                raise PLIError("%s: %s is not allocated" % (name, ref.name))
+            arr = arr.stack[-1]
         if not isinstance(arr, (PLIArray, PLIStructArray)):
             raise PLIError("%s: %s is not an array" % (name, ref.name))
         dim = int(to_number(interp.eval(node.args[1], env))) \
@@ -2770,6 +2882,15 @@ def builtin_dispatch(interp, name, args, node, env):
         return interp.current_cond.char if interp.current_cond else ""
     if name == "ONSOURCE":
         return interp.current_cond.source if interp.current_cond else ""
+    if name == "ONLOC":
+        return getattr(interp.current_cond, "loc", "") \
+            if interp.current_cond else ""
+    if name == "ONFILE":
+        c = interp.current_cond
+        return (c.qual or "") if c else ""
+    if name == "ONKEY":
+        c = interp.current_cond
+        return (c.source or "") if c and c.name == "KEY" else ""
     if name == "DATE":
         return time.strftime("%y%m%d")
     if name == "TIME":

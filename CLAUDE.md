@@ -54,6 +54,15 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
   byte overlay; UNSPEC works per-scalar via struct. BY NAME,
   DO REPEAT, REGIONAL files, cross-sections A(*,2): unsupported.
+- v0.4.0 additions: multiple assignment (Assign.target may be a list);
+  DISPLAY/REPLY (reads stdin line); STATIC retention via
+  interp.static_store keyed by id(DeclItem); GET COPY (echo) and
+  GET STRING EDIT (string_input guards _read_chars); ONLOC (proc_stack
+  + cond.loc set in dispatch)/ONFILE(qual)/ONKEY(source); prefix
+  honoring via module-global _DISABLED (NOSIZE=truncate,
+  NOSTRINGRANGE=clamp, SUBSCRIPTRANGE never disabled); ALLOCATE with
+  bounds (alloc items are 3-tuples name/set_ref/bounds). Dropped by
+  owner decision: 48-char set, label arrays.
 - v0.3.0 additions: arrays of structures (PLIStructArray +
   StructMemberView for T.M(I)/M(I) distributed subscripts; INITIAL
   distributes across elements), INIT iteration factors ((10)0, (n)*

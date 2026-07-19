@@ -96,8 +96,18 @@ representations).
 **Flow control** — `IF`/`THEN`/`ELSE`, all `DO` forms (groups, `WHILE`,
 `UNTIL`, iterative with multiple specifications), `SELECT`/`WHEN`/
 `OTHERWISE`, `GOTO` (incl. out of procedures and through LABEL
-variables), `LEAVE`/`ITERATE`, `STOP`, and **multiple closure**: a
-labeled `END X;` closes every group opened since the group labeled `X`.
+variables), `LEAVE`/`ITERATE`, `STOP`, **multiple closure** (a labeled
+`END X;` closes every group opened since the group labeled `X`),
+multiple assignment (`A, B, C = expr;` — right side evaluated once),
+and `DISPLAY(expr) [REPLY(var)]` operator console I/O.
+`STATIC` variables retain their values across invocations (INITIAL
+applies once).  Condition prefixes `(NOSIZE):` and `(NOSTRINGRANGE):`
+are honored: disabled SIZE truncates silently, disabled STRINGRANGE
+clamps SUBSTR (SUBSCRIPTRANGE stays always-checked).  `ONLOC`,
+`ONFILE` and `ONKEY` report the raising procedure / file / key inside
+ON-units.  `ALLOCATE A(N);` re-specifies CONTROLLED bounds per
+allocation.  `GET` supports the `COPY` option (echoes input) and
+`GET STRING(...) EDIT(...)(...)`.
 
 **ON-conditions** — `ON cond [SNAP] unit | SYSTEM`, `SIGNAL`, `REVERT`,
 `ONCODE`/`ONCHAR`/`ONSOURCE`, user conditions via `CONDITION(name)`.
