@@ -105,6 +105,10 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   Drivers: `sqlite` (stdlib, offline tests) and `ibm_db` (Db2;
   `jdbc:db2://host:port/db` URL parsed into native DSN). Missing
   "password" ⇒ `interp.password_prompt` (getpass in CLI, dialog in IDE).
+  `"securityMechanism": "11"` on an ibm_db connection ⇒ Kerberos: DSN
+  gets AUTHENTICATION=KERBEROS instead of PWD=, no password prompt;
+  Windows SSPI/prior kinit supplies the ticket (typical for Db2 LUW —
+  z/OS stays on password auth).
 - Precompiler-layer statements: CONNECT TO/RESET, SET CONNECTION,
   SELECT INTO (+100/-811), DECLARE/OPEN/FETCH/CLOSE cursor, COMMIT/
   ROLLBACK, WHENEVER (SQLERROR/SQLWARNING/NOT FOUND ×

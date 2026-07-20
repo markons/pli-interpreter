@@ -201,7 +201,10 @@ program, then the current directory, then `~`:
 { "SAMPLE": { "driver": "ibm_db",
               "url": "jdbc:db2://localhost:25000/sample",
               "user": "db2admin" },
-  "TESTDB": { "driver": "sqlite", "url": "testdb.sqlite" } }
+  "TESTDB": { "driver": "sqlite", "url": "testdb.sqlite" },
+  "LUWKRB": { "driver": "ibm_db",
+              "url": "jdbc:db2://dbhost.example.com:50000/luwdb",
+              "user": "svc-user", "securityMechanism": "11" } }
 ```
 
 Drivers: `sqlite` (stdlib — used by `examples/sqldemo.pli`, works
@@ -211,6 +214,11 @@ DLLs are put on the search path automatically).  A missing
 `"password"` key prompts at CONNECT — masked in the terminal for the
 CLI, a dialog in the IDE.  `examples/sqldemo_db2.pli` is the same demo
 against a real Db2.
+
+Kerberos (typical for Db2 LUW): set `"securityMechanism": "11"` on an
+`ibm_db` connection — no password field, no prompt; the DSN gets
+`AUTHENTICATION=KERBEROS` and Windows SSPI (or a prior `kinit`) supplies
+the ticket.
 
 Not implemented (yet): NULL indicator variables (fetching NULL sets
 `SQLCODE` −305), dynamic SQL (`PREPARE`/`EXECUTE`/`EXECUTE IMMEDIATE`),

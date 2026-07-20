@@ -23,7 +23,9 @@ directory, the current directory, then the user's home directory:
 
 Drivers: "sqlite" (stdlib), "ibm_db" (pip install ibm_db; the
 jdbc:db2://host:port/db URL is translated to an ibm_db DSN).  A missing
-"password" key triggers the interpreter's password prompt.
+"password" key triggers the interpreter's password prompt, unless
+"securityMechanism": "11" is set, which selects Kerberos (no password
+sent; Windows SSPI or a prior `kinit` supplies the ticket).
 """
 import json
 import os
@@ -169,10 +171,15 @@ class SqlRuntime:
                       "port": cfg.get("port", 50000),
                       "database": cfg.get("database", url)}
             user = cfg.get("user", "")
-            pwd = self._password(cfg, key)
             dsn = ("DATABASE=%s;HOSTNAME=%s;PORT=%d;PROTOCOL=TCPIP;"
-                   "UID=%s;PWD=%s;" % (p["database"], p["host"],
-                                       p["port"], user, pwd))
+                   "UID=%s;" % (p["database"], p["host"], p["port"], user))
+            if str(cfg.get("securityMechanism", "")) == "11":
+                # Kerberos: no password sent, Windows SSPI/kinit ticket
+                # cache handles the handshake (same as pli-tools-vscode's
+                # ibm_db path).
+                dsn += "AUTHENTICATION=KERBEROS;"
+            else:
+                dsn += "PWD=%s;" % self._password(cfg, key)
             conn = ibm_db_dbi.connect(dsn, "", "")
         else:
             raise SQLError("unknown driver %r (supported: sqlite, ibm_db)"
