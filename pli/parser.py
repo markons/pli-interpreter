@@ -32,7 +32,7 @@ KNOWN_ATTRIBUTES = {
     # file description attributes
     "STREAM", "RECORD", "INPUT", "OUTPUT", "UPDATE", "KEYED", "PRINT",
     "TITLE", "ENVIRONMENT", "ENV", "SEQUENTIAL", "DIRECT", "BUFFERED",
-    "UNBUFFERED",
+    "UNBUFFERED", "EXCLUSIVE",
 }
 
 
@@ -612,8 +612,14 @@ class PLIParser:
                    | READ io_opts SEMI
                    | WRITE io_opts SEMI
                    | REWRITE io_opts SEMI
-                   | DELETE io_opts SEMI"""
+                   | DELETE io_opts SEMI
+                   | UNLOCK io_opts SEMI"""
         p[0] = N.IOStmt(p.slice[1].type, p[2], lineno=p.lineno(1))
+
+    def p_locate_stmt(self, p):
+        "io_stmt : LOCATE ID io_opts SEMI"
+        p[0] = N.IOStmt("LOCATE", [("VAR", p[2])] + p[3],
+                        lineno=p.lineno(1))
 
     def p_io_opts(self, p):
         """io_opts : io_opts io_opt

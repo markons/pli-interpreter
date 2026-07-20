@@ -1,4 +1,4 @@
-# Formal syntax of the pli interpreter (v0.5.0)
+# Formal syntax of the pli interpreter (v0.6.0)
 
 This is the grammar actually implemented by `pli/lexer.py` and
 `pli/parser.py` (the nonterminal names below match the yacc rules), in
@@ -269,10 +269,12 @@ full list = `reserved` table in `pli/lexer.py`).
                     (* must be labeled; referenced by R(label) *)
 
 <io_stmt>       ::= <io_verb> { <io_opt> } ';'
+                  | 'LOCATE' ID { <io_opt> } ';'   (* based output buffer *)
 <io_verb>       ::= 'OPEN' | 'CLOSE' | 'READ' | 'WRITE'
-                  | 'REWRITE' | 'DELETE'
+                  | 'REWRITE' | 'DELETE' | 'UNLOCK'
 <io_opt>        ::= 'FILE' '(' ID ')'
-                  | ID '(' <expr> ')'    (* INTO FROM KEY KEYTO KEYFROM TITLE *)
+                  | ID '(' <expr> ')'    (* INTO FROM KEY KEYTO KEYFROM
+                                            TITLE SET EVENT PAGESIZE *)
                   | ID                   (* INPUT OUTPUT UPDATE STREAM ...    *)
 
 <ref_list>      ::= <ref> { ',' <ref> }
@@ -370,6 +372,23 @@ connected database.
 <pp_decl>       ::= ID [ 'FIXED' | 'CHARACTER' | 'CHAR' ]
 <pp_unit>       ::= '%' 'DO' ';' source-text '%' 'END' ';'
                   | <pp_stmt>
+
+<pp_proc>       ::= '%' ID ':' ( 'PROC' | 'PROCEDURE' )
+                        [ '(' <id_list> ')' ] [ 'RETURNS' '(' ... ')' ] ';'
+                        { <pp_body_stmt> }
+                    '%' 'END' ';'
+<pp_body_stmt>  ::= (* WITHOUT a leading %, F style: *)
+                    ID '=' <pp_expr> ';'
+                  | ( 'DCL' | 'DECLARE' ) ID [ type ] { ',' ID [ type ] } ';'
+                  | 'IF' <pp_expr> 'THEN' <pp_body_stmt>
+                        [ 'ELSE' <pp_body_stmt> ]
+                  | 'DO' ';' { <pp_body_stmt> } 'END' ';'
+                  | 'DO' ID '=' <pp_expr> 'TO' <pp_expr>
+                        [ 'BY' <pp_expr> ] ';' { <pp_body_stmt> } 'END' ';'
+                  | 'RETURN' '(' <pp_expr> ')' ';'
+                  | ';'
+                    (* an activated invocation  name(args)  in program
+                       text is replaced by the RETURN value *)
 
 <pp_expr>       ::= (* NUMBER, STRING, pp-variable names, ( ), and the
                        operators  + - * /  ||  = ^= <> < <= > >=  & |

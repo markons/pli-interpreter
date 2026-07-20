@@ -54,6 +54,20 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
   byte overlay; UNSPEC works per-scalar via struct. BY NAME,
   DO REPEAT, REGIONAL files, cross-sections A(*,2): unsupported.
+- v0.6.0 additions: separate compilation (run_files/run_multi concat
+  top-level stmt lists; CLI takes multiple files; STATIC EXTERNAL
+  shares via static_store key ("EXTERNAL", name) — EXTERNAL alone
+  implies STATIC); LOCATE mode (PLIFile.pending flushed on next
+  LOCATE/WRITE/CLOSE) and READ SET (finds the BasedVar whose ptr_ref
+  names the SET pointer, else raw CHAR buffer); EVENT option on record
+  I/O runs _exec_io on a thread, conditions stored on the EventValue
+  and raised at WAIT; EXCLUSIVE file locks (per-key thread owner,
+  released by REWRITE/DELETE/UNLOCK); ENV(REGIONAL(1)) = INDEXED with
+  numeric keys; %PROCEDURE preprocessor functions (body statements
+  WITHOUT %, own mini parser/exec in preproc.py; invocation name(args)
+  substitutes RETURN value, result rescanned). Fixed: _arg_cell dummy
+  decl for FixedDec/complex; _record_into resolves PtrRef targets.
+  Example stage9.pli MUST run with stage9sub.pli (two files!).
 - v0.5.0 additions: CHECK prefixes (interp.checked set, hook in
   assign_target, default print / ON CHECK raise); ONSOURCE/ONCHAR
   pseudo-vars + CONVERSION retry (interp._convert loop dispatches the

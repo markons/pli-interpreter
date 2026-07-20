@@ -1,0 +1,71 @@
+/* v0.6.0: separate compilation (run with stage9sub.pli!), LOCATE /
+   READ SET, EVENT async I/O, EXCLUSIVE/UNLOCK, REGIONAL(1), %PROC
+
+   run:  python -m pli stage9.pli stage9sub.pli                     */
+
+%SQUARE: PROC(N) RETURNS(FIXED);
+   DCL X FIXED;
+   X = N * N;
+   RETURN(X);
+%END;
+
+S9: PROC OPTIONS(MAIN);
+   DCL ADDTAX ENTRY RETURNS(FIXED DEC(9,2));   /* external */
+   DCL 1 REC BASED(P),
+         2 ID   CHAR(4),
+         2 NAME CHAR(8),
+         2 QTY  FIXED;
+   DCL (P, Q) POINTER;
+   DCL LOG  FILE RECORD OUTPUT;
+   DCL RGN  FILE RECORD KEYED ENV(REGIONAL(1)) EXCLUSIVE;
+   DCL E1   EVENT;
+   DCL (I, N) FIXED;
+   DCL EOF BIT(1) INIT('0'B);
+
+   /* preprocessor procedure expanded at compile time */
+   PUT LIST('SQUARE(9) at compile time =', SQUARE(9));
+
+   /* separate compilation + STATIC EXTERNAL */
+   PUT SKIP LIST('100 with tax:', ADDTAX(100.00));
+   PUT SKIP LIST('200 with tax:', ADDTAX(200.00));
+   CALL SHOWRUNS;
+
+   /* LOCATE-mode output: build records in based buffers */
+   OPEN FILE(LOG) OUTPUT TITLE('stage9_log.dat');
+   DO I = 1 TO 3;
+      LOCATE REC FILE(LOG) SET(P);
+      P -> ID   = 'R00' || I;
+      P -> NAME = 'ITEM' || I;
+      P -> QTY  = I * 10;
+   END;
+   CLOSE FILE(LOG);                    /* flushes the last buffer */
+
+   /* READ ... SET: records arrive in a based buffer */
+   ON ENDFILE(LOG) EOF = '1'B;
+   OPEN FILE(LOG) INPUT TITLE('stage9_log.dat');
+   PUT SKIP(2) LIST('log records via READ SET:');
+   DO WHILE(^EOF);
+      READ FILE(LOG) SET(P);
+      IF ^EOF THEN
+         PUT SKIP LIST(P -> ID, P -> NAME, P -> QTY);
+   END;
+   CLOSE FILE(LOG);
+
+   /* REGIONAL(1): numeric region keys + EXCLUSIVE locking */
+   OPEN FILE(RGN) UPDATE TITLE('stage9_rgn.dat');
+   DO I = 3 TO 1 BY -1;
+      REC.ID = 'K' || I;               /* unqualified based via P?  */
+      WRITE FILE(RGN) FROM(P -> REC) KEYFROM(I);
+   END;
+   READ FILE(RGN) INTO(P -> REC) KEY(2);   /* locks region 2 */
+   PUT SKIP(2) LIST('region 2 id =', P -> ID);
+   UNLOCK FILE(RGN) KEY(2);
+   CLOSE FILE(RGN);
+
+   /* EVENT async record I/O + WAIT */
+   OPEN FILE(LOG) INPUT TITLE('stage9_log.dat');
+   READ FILE(LOG) INTO(P -> REC) EVENT(E1);
+   WAIT(E1);
+   PUT SKIP LIST('async read got:', P -> ID, 'status', STATUS(E1));
+   CLOSE FILE(LOG);
+END S9;

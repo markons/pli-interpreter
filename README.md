@@ -137,11 +137,28 @@ factors: `(3) F(5)`, `2 (A(2), X(1))`, nested), `DATA` (data-directed,
 both directions), `STRING`, `FILE(f)`, `SKIP(n)`, `PAGE`; SYSPRINT tab
 stops.
 
-**Record I/O** — `DCL f FILE RECORD [KEYED] ENV(INDEXED)`, `OPEN`
-(`TITLE`, mode), `CLOSE`, `READ INTO [KEY|KEYTO]`, `WRITE FROM
-[KEYFROM]`, `REWRITE`, `DELETE`. CONSECUTIVE files are text files (one
-record per line); INDEXED files persist as sorted `key<TAB>record`
-lines. Structures map to fixed-width record fields.
+**Record I/O** — `DCL f FILE RECORD [KEYED] ENV(INDEXED|REGIONAL(1))
+[EXCLUSIVE]`, `OPEN` (`TITLE`, mode), `CLOSE`, `READ INTO [KEY|KEYTO]`,
+`WRITE FROM [KEYFROM]`, `REWRITE`, `DELETE`, `UNLOCK`. CONSECUTIVE
+files are text files (one record per line); INDEXED files persist as
+sorted `key<TAB>record` lines; REGIONAL(1) uses numeric region keys.
+Structures map to fixed-width record fields.  **LOCATE mode**:
+`LOCATE recvar FILE(f) [SET(p)];` builds output records in based
+buffers (written on the next operation), and `READ FILE(f) SET(p);`
+delivers input records through the based variable declared on `p`.
+`EXCLUSIVE` files lock records on keyed READ (released by
+REWRITE/DELETE/UNLOCK).  The `EVENT(e)` option on
+READ/WRITE/REWRITE/DELETE runs the operation asynchronously; its
+conditions are raised at `WAIT(e)`.
+
+**Separate compilation** — `python -m pli main.pli sub1.pli ...`
+treats each file as a separately compiled external procedure; the one
+with `OPTIONS(MAIN)` is the entry point, cross-file `CALL`s just work,
+and `STATIC EXTERNAL` data is shared by name across all units
+(`DCL X ENTRY ...` declarations are descriptive).  The preprocessor
+supports **%PROCEDURE functions**: `%name: PROC(parms); ... RETURN(e);
+%END;` — activated invocations `name(args)` in program text are
+replaced by the returned value at compile time.
 
 **Preprocessor** — `%DECLARE`, `%var = expr`, `%IF/%THEN/%ELSE`,
 `%DO ... %END` (unrolled), `%INCLUDE`, `%ACTIVATE`/`%DEACTIVATE`,

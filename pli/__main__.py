@@ -1,14 +1,19 @@
-"""Command-line entry point:  python -m pli program.pli"""
+"""Command-line entry point:  python -m pli main.pli [sub.pli ...]
+
+Several files are treated as separately compiled external procedures
+linked into one program (the one with OPTIONS(MAIN) is the entry).
+"""
 import sys
 
-from .interpreter import run_file, PLIError
+from .interpreter import run_files, PLIError
 from .parser import ParseError
 from .lexer import LexError
 
 
 def main(argv):
-    if len(argv) != 1:
-        print("usage: python -m pli <program.pli>", file=sys.stderr)
+    if len(argv) < 1:
+        print("usage: python -m pli <program.pli> [more.pli ...]",
+              file=sys.stderr)
         return 2
     try:
         # Windows pipes often deliver UTF-8 with a BOM while Python decodes
@@ -18,7 +23,7 @@ def main(argv):
     except (AttributeError, OSError, ValueError):
         pass
     try:
-        run_file(argv[0])
+        run_files(argv)
     except (PLIError, ParseError, LexError) as e:
         print("PL/I error: %s" % e, file=sys.stderr)
         return 1

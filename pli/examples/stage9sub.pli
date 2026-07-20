@@ -1,0 +1,12 @@
+/* separately compiled external procedures: linked with stage9.pli */
+ADDTAX: PROC(AMT) RETURNS(FIXED DEC(9,2));
+   DCL AMT FIXED DEC(9,2);
+   DCL RUNS FIXED STATIC EXTERNAL INIT(0);   /* shared with main */
+   RUNS = RUNS + 1;
+   RETURN(AMT * 1.08);
+END ADDTAX;
+
+SHOWRUNS: PROC;
+   DCL RUNS FIXED STATIC EXTERNAL;
+   PUT SKIP LIST('ADDTAX was called', RUNS, 'times');
+END SHOWRUNS;

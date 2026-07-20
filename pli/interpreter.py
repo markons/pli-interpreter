@@ -387,6 +387,11 @@ class PLIFile:
         self.tokens = []          # GET LIST buffer
         self.in_line = ""         # GET EDIT buffer
         self.in_pos = 0
+        self.exclusive = False
+        self.regional = False
+        self.locks = {}           # key -> owning thread id (EXCLUSIVE)
+        self.pending = None       # LOCATE-mode output buffer
+        self.io_lock = threading.RLock()
 
     @property
     def is_open(self):
@@ -672,10 +677,18 @@ class Interpreter:
     # -- program entry ----------------------------------------------------
 
     def run(self, source, include_dir="."):
+        return self.run_multi([(source, include_dir)])
+
+    def run_multi(self, sources):
+        """Run a program built from several separately-compiled source
+        units (external procedures); the first unit's directory is the
+        search base for %INCLUDE members and pli_dbc.json."""
         from .preproc import preprocess
-        self.include_dir = include_dir
-        source = preprocess(source, include_dir)
-        program = self.parser.parse(source)
+        self.include_dir = sources[0][1] if sources else "."
+        program = []
+        for source, incdir in sources:
+            expanded = preprocess(source, incdir)
+            program.extend(self.parser.parse(expanded) or [])
         genv = Environment()
         self.global_env = genv
         main = None
@@ -927,6 +940,8 @@ class Interpreter:
                     f.mode = gname
                 elif gname == "KEYED":
                     f.keyed = True
+                elif gname == "EXCLUSIVE":
+                    f.exclusive = True
                 elif gname == "PRINT":
                     f.stream = f.print_file = True
                 elif gname == "TITLE" and gargs:
@@ -936,6 +951,8 @@ class Interpreter:
                         n = getattr(a, "name", None)
                         if n == "INDEXED":
                             f.indexed = f.keyed = True
+                        elif n == "REGIONAL":
+                            f.indexed = f.keyed = f.regional = True
                 elif gname in ("SEQUENTIAL", "DIRECT", "BUFFERED",
                                "UNBUFFERED", "EXTERNAL", "INTERNAL"):
                     pass
@@ -973,8 +990,12 @@ class Interpreter:
                 if vals and vals[0] is not None:
                     existing.value = convert(self.eval(vals[0], env), decl)
             return
-        if "STATIC" in kinds:
-            key = (id(item), name)
+        external = any(k == "GENERIC" and v[0] == "EXTERNAL"
+                       for k, v in item.attrs)
+        if "STATIC" in kinds or external:
+            # EXTERNAL data is shared by NAME across all procedures
+            # (separate compilation); plain STATIC is per-declaration
+            key = ("EXTERNAL", name) if external else (id(item), name)
             if key not in self.static_store:
                 self.static_store[key] = self._make_entry(name, item, env)
             env.declare(name, self.static_store[key])
@@ -1560,6 +1581,11 @@ class Interpreter:
                     done += 1
                     if done >= need:
                         break
+        for e in events:
+            cond = getattr(e, "io_cond", None)
+            if cond is not None and e.complete:
+                e.io_cond = None       # conditions of async I/O raise here
+                raise cond
 
     def _arg_cell(self, arg, env):
         """By-reference for plain variables, dummy Variable otherwise."""
@@ -1578,14 +1604,18 @@ class Interpreter:
             if isinstance(entry, (Variable, PLIArray, PLIStructure)):
                 return entry                     # by reference
         value = self.eval(arg, env)
-        if isinstance(value, float):
+        if isinstance(value, FixedDec):
+            decl = Decl("FIXED", prec=(value.p, value.q))
+        elif isinstance(value, (float, complex)):
             decl = Decl("FLOAT")
         elif isinstance(value, int):
             decl = Decl("FIXED")
         elif isinstance(value, BitStr):
             decl = Decl("BIT", len(value))
-        else:
+        elif isinstance(value, str):
             decl = Decl("CHAR", len(value), varying=True)
+        else:
+            decl = Decl("FLOAT")
         return Variable(value, decl)
 
     def exec_If(self, stmt, env):
@@ -2503,12 +2533,37 @@ class Interpreter:
 
     def exec_IOStmt(self, stmt, env):
         opts = dict((k.upper(), v) for k, v in stmt.opts)
+        if "EVENT" in opts and stmt.verb in ("READ", "WRITE", "REWRITE",
+                                             "DELETE"):
+            ev = self.eval(opts.pop("EVENT"), env)
+            if not isinstance(ev, EventValue):
+                raise PLIError("EVENT(...) needs an EVENT variable")
+            ev.ev.clear()
+            ev.status = 0
+            ev.io_cond = None
+
+            def work():
+                try:
+                    self._exec_io(stmt.verb, opts, env, stmt)
+                except (PLICondition, PLIError) as e:
+                    ev.status = 1
+                    ev.io_cond = e if isinstance(e, PLICondition) \
+                        else PLICondition("ERROR", str(e))
+                finally:
+                    ev.ev.set()
+
+            t = threading.Thread(target=work, daemon=True)
+            t.start()
+            self.tasks.append(t)
+            return
+        self._exec_io(stmt.verb, opts, env, stmt)
+
+    def _exec_io(self, verb, opts, env, stmt):
         fname = opts.get("FILE")
         if fname is None:
             raise PLIError("line %d: %s needs FILE(...)"
-                           % (stmt.lineno, stmt.verb))
+                           % (stmt.lineno, verb))
         f = self._file_entry(fname, env)
-        verb = stmt.verb
         if verb == "OPEN":
             if fname == "SYSPRINT":
                 # PRINT-file options on the standard output channel
@@ -2530,76 +2585,159 @@ class Interpreter:
             self._open_file(f)
             return
         if verb == "CLOSE":
+            self._flush_locate(f)
             self._close_file(f)
+            return
+        if verb == "UNLOCK":
+            if "KEY" in opts:
+                f.locks.pop(self._file_key(f, self.eval(opts["KEY"], env)),
+                            None)
+            else:
+                f.locks.clear()
+            return
+        if verb == "LOCATE":
+            self._open_file(f, f.mode or "OUTPUT")
+            self._flush_locate(f)
+            vname = opts.get("VAR")
+            bv = env.lookup(vname)
+            if not isinstance(bv, BasedVar):
+                raise PLIError("LOCATE %s: not a BASED variable" % vname)
+            inst = self._instantiate(bv.name, bv.item, bv.subitems, env)
+            ptr_ref = opts.get("SET") or bv.ptr_ref
+            if ptr_ref is None:
+                raise PLIError("LOCATE %s: no SET pointer" % vname)
+            self.assign_target(ptr_ref, Pointer(inst), env)
+            f.pending = inst      # written on next LOCATE/WRITE/CLOSE
             return
         if verb == "READ":
             self._open_file(f, f.mode or "INPUT")
             into = opts.get("INTO")
-            if into is None:
-                raise PLIError("READ needs INTO(...)")
-            if f.indexed:
-                if "KEY" in opts:
-                    key = to_string(self.eval(opts["KEY"], env)).strip()
-                    if key not in f.index:
-                        raise PLICondition("KEY", "key %r not found in %s"
-                                           % (key, f.name), qual=f.name,
-                                           source=key)
-                    record = f.index[key]
+            setp = opts.get("SET")
+            if into is None and setp is None:
+                raise PLIError("READ needs INTO(...) or SET(...)")
+            with f.io_lock:
+                if f.indexed:
+                    if "KEY" in opts:
+                        key = self._file_key(f, self.eval(opts["KEY"], env))
+                        if key not in f.index:
+                            raise PLICondition("KEY",
+                                               "key %r not found in %s"
+                                               % (key, f.name), qual=f.name,
+                                               source=key)
+                        record = f.index[key]
+                    else:
+                        if f.seq_keys is None:
+                            keys = sorted(f.index, key=int) if f.regional \
+                                else sorted(f.index)
+                            f.seq_keys = iter(keys)
+                        try:
+                            key = next(f.seq_keys)
+                        except StopIteration:
+                            raise PLICondition("ENDFILE", "end of file %s"
+                                               % f.name, qual=f.name)
+                        record = f.index[key]
+                    if f.exclusive and f.mode == "UPDATE":
+                        self._acquire_lock(f, key)
+                    if "KEYTO" in opts:
+                        self.assign_target(opts["KEYTO"], key, env)
                 else:
-                    if f.seq_keys is None:
-                        f.seq_keys = iter(sorted(f.index))
-                    try:
-                        key = next(f.seq_keys)
-                    except StopIteration:
+                    line = f.handle.readline()
+                    if not line:
                         raise PLICondition("ENDFILE", "end of file %s"
                                            % f.name, qual=f.name)
-                    record = f.index[key]
-                if "KEYTO" in opts:
-                    self.assign_target(opts["KEYTO"], key, env)
+                    record = line.rstrip("\n")
+            if into is not None:
+                self._record_into(into, record, env)
             else:
-                line = f.handle.readline()
-                if not line:
-                    raise PLICondition("ENDFILE", "end of file %s" % f.name,
-                                       qual=f.name)
-                record = line.rstrip("\n")
-            self._record_into(into, record, env)
+                self._read_set(setp, record, env)
             return
         if verb in ("WRITE", "REWRITE"):
             self._open_file(f, f.mode or ("UPDATE" if verb == "REWRITE"
                                           else "OUTPUT"))
+            self._flush_locate(f)
             from_ = opts.get("FROM")
             if from_ is None:
                 raise PLIError("%s needs FROM(...)" % verb)
             record = self._record_from(from_, env)
-            if f.indexed:
-                if verb == "WRITE":
-                    keyopt = opts.get("KEYFROM")
+            with f.io_lock:
+                if f.indexed:
+                    if verb == "WRITE":
+                        keyopt = opts.get("KEYFROM")
+                    else:
+                        keyopt = opts.get("KEY", opts.get("KEYFROM"))
+                    if keyopt is None:
+                        raise PLIError("%s on INDEXED file needs a key"
+                                       % verb)
+                    key = self._file_key(f, self.eval(keyopt, env))
+                    if verb == "REWRITE" and key not in f.index:
+                        raise PLICondition("KEY", "key %r not found" % key,
+                                           qual=f.name, source=key)
+                    f.index[key] = record
+                    f.dirty = True
+                    f.locks.pop(key, None)     # REWRITE releases the lock
                 else:
-                    keyopt = opts.get("KEY", opts.get("KEYFROM"))
-                if keyopt is None:
-                    raise PLIError("%s on INDEXED file needs a key" % verb)
-                key = to_string(self.eval(keyopt, env)).strip()
-                if verb == "REWRITE" and key not in f.index:
-                    raise PLICondition("KEY", "key %r not found" % key,
-                                       qual=f.name, source=key)
-                f.index[key] = record
-                f.dirty = True
-            else:
-                if verb == "REWRITE":
-                    raise PLIError("REWRITE requires an INDEXED file")
-                f.handle.write(record + "\n")
+                    if verb == "REWRITE":
+                        raise PLIError("REWRITE requires an INDEXED file")
+                    f.handle.write(record + "\n")
             return
         if verb == "DELETE":
             self._open_file(f, f.mode or "UPDATE")
             if not f.indexed or "KEY" not in opts:
                 raise PLIError("DELETE needs an INDEXED file and KEY(...)")
-            key = to_string(self.eval(opts["KEY"], env)).strip()
-            if key not in f.index:
-                raise PLICondition("KEY", "key %r not found" % key,
-                                   qual=f.name, source=key)
-            del f.index[key]
-            f.dirty = True
+            key = self._file_key(f, self.eval(opts["KEY"], env))
+            with f.io_lock:
+                if key not in f.index:
+                    raise PLICondition("KEY", "key %r not found" % key,
+                                       qual=f.name, source=key)
+                del f.index[key]
+                f.dirty = True
+                f.locks.pop(key, None)
             return
+
+    def _file_key(self, f, v):
+        if f.regional:
+            return str(int(to_number(v)))
+        return to_string(v).strip()
+
+    def _acquire_lock(self, f, key):
+        me = threading.get_ident()
+        for _ in range(600):               # wait up to ~30s
+            with f.io_lock:
+                owner = f.locks.get(key)
+                if owner is None or owner == me:
+                    f.locks[key] = me
+                    return
+            time.sleep(0.05)
+        raise PLIError("record %r in %s is locked" % (key, f.name))
+
+    def _flush_locate(self, f):
+        if f.pending is not None:
+            record = self._record_of_value(f.pending)
+            f.pending = None
+            if f.indexed:
+                raise PLIError("LOCATE mode requires a CONSECUTIVE file")
+            f.handle.write(record + "\n")
+
+    def _read_set(self, setp, record, env):
+        """READ ... SET(P): build the based buffer and point P at it."""
+        pname = getattr(setp, "name", None)
+        target = None
+        e = env
+        while e is not None and target is None:
+            for entry in e.vars.values():
+                if isinstance(entry, BasedVar) and entry.ptr_ref is not None \
+                        and getattr(entry.ptr_ref, "name", None) == pname:
+                    target = entry
+                    break
+            e = e.parent
+        if target is not None:
+            inst = self._instantiate(target.name, target.item,
+                                     target.subitems, env)
+            self._fill_from_record(inst, record)
+        else:                    # no matching BASED variable: raw buffer
+            inst = Variable(record, Decl("CHAR", len(record),
+                                         varying=True))
+        self.assign_target(setp, Pointer(inst), env)
 
     def _leaf_width(self, decl):
         if decl.base == "CHAR":
@@ -2613,7 +2751,9 @@ class Interpreter:
         return 24                    # FLOAT and everything else
 
     def _record_from(self, ref, env):
-        value = self.eval(ref, env)
+        return self._record_of_value(self.eval(ref, env))
+
+    def _record_of_value(self, value):
         if isinstance(value, PLIStructure):
             parts = []
             for leaf in value.leaves():
@@ -2636,8 +2776,19 @@ class Interpreter:
         entry = None
         if isinstance(ref, N.Ref) and ref.args is None:
             entry = env.lookup(ref.name) or self._search_member(ref.name, env)
+        elif isinstance(ref, N.PtrRef) and ref.args is None:
+            entry = self._ptr_entry(ref, env)
         if isinstance(entry, BasedVar):
             entry = self._based_target(entry, env)
+        if isinstance(entry, PLIStructure):
+            self._fill_from_record(entry, record)
+            return
+        self.assign_target(ref, record, env)
+
+    def _fill_from_record(self, entry, record):
+        if isinstance(entry, Variable):
+            entry.value = convert(record, entry.decl)
+            return
         if isinstance(entry, PLIStructure):
             pos = 0
             for leaf in entry.leaves():
@@ -2657,8 +2808,6 @@ class Interpreter:
                         chunk = chunk.strip() or "0"
                     leaf.value = convert(chunk, leaf.decl)
                     pos += w
-            return
-        self.assign_target(ref, record, env)
 
     def eval_Member(self, node, env):
         base = self.eval(node.base, env)
@@ -3189,7 +3338,14 @@ def run_source(source, stdin=None, stdout=None, include_dir="."):
 
 
 def run_file(path, stdin=None, stdout=None):
-    with open(path, "r", encoding="utf-8-sig") as f:   # tolerate BOM
-        source = f.read()
-    run_source(source, stdin=stdin, stdout=stdout,
-               include_dir=os.path.dirname(os.path.abspath(path)))
+    run_files([path], stdin=stdin, stdout=stdout)
+
+
+def run_files(paths, stdin=None, stdout=None):
+    """Separate compilation: several source files form one program."""
+    sources = []
+    for path in paths:
+        with open(path, "r", encoding="utf-8-sig") as f:  # tolerate BOM
+            sources.append((f.read(),
+                            os.path.dirname(os.path.abspath(path))))
+    Interpreter(stdin=stdin, stdout=stdout).run_multi(sources)

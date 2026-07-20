@@ -50,6 +50,7 @@ reserved = {
     "WAIT": "WAIT",
     "DISPLAY": "DISPLAY",
     "ENTRY": "ENTRYKW",
+    "LOCATE": "LOCATE", "UNLOCK": "UNLOCK",
 }
 
 tokens = [

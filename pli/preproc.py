@@ -65,7 +65,17 @@ class Preprocessor:
             if kind == "pct":
                 i = self._pp_statement(toks, i + 1, out)
             elif kind == "name" and val.upper() in self.active:
-                _, value = self.vars[val.upper()]
+                typ, value = self.vars[val.upper()]
+                if typ == "PROC":
+                    j = self._skip_ws(toks, i + 1)
+                    if j < len(toks) and toks[j][1] == "(":
+                        args, i = self._collect_call_args(toks, j)
+                        result = self._exec_proc(val.upper(), args)
+                        out.extend(self._run(_tokenize(str(result))))
+                        continue
+                    out.append(val)      # no argument list: leave as-is
+                    i += 1
+                    continue
                 out.append(str(value))
                 i += 1
             else:
@@ -139,9 +149,13 @@ class Preprocessor:
             return self._skip_to_label(toks, i, names[0])
         if word in self.vars or (kind == "name" and word not in
                                  ("THEN", "ELSE", "END")):
-            # %name = expr;   or   %label: ;
+            # %name = expr;   or   %label: ;   or   %name: PROC...
             j = self._skip_ws(toks, i + 1)
             if j < len(toks) and toks[j][0] == "op" and toks[j][1] == ":":
+                k = self._skip_ws(toks, j + 1)
+                if k < len(toks) and toks[k][0] == "name" and \
+                        toks[k][1].upper() in ("PROC", "PROCEDURE"):
+                    return self._pp_proc_def(word, toks, k + 1)
                 _, i2 = self._until_semi(toks, j + 1)
                 return i2                     # label definition: no output
             seg, i = self._until_semi(toks, i + 1)
@@ -182,6 +196,262 @@ class Preprocessor:
 
     def _name_list(self, seg):
         return [v.upper() for k, v in seg if k == "name"]
+
+    # ---- preprocessor procedures (%name: PROC ... %END;) ----------------
+
+    def _pp_proc_def(self, name, toks, i):
+        """Parse %name: PROC(parms) [RETURNS(...)]; body %END;
+        Body statements are written WITHOUT the %% sign (F style):
+        assignment, IF/THEN/ELSE, DO;...END;, DO v=a TO b [BY c];,
+        RETURN(expr);"""
+        header, i = self._until_semi(toks, i)
+        header = [t for t in header if t[0] not in ("ws", "comment")]
+        params = []
+        j = 0
+        if j < len(header) and header[j][1] == "(":
+            j += 1
+            while j < len(header) and header[j][1] != ")":
+                if header[j][0] == "name":
+                    params.append(header[j][1].upper())
+                j += 1
+        # RETURNS(...) in the header is accepted and ignored
+        body = []
+        depth = 0
+        while i < len(toks):
+            if toks[i][0] == "pct":
+                j2 = self._skip_ws(toks, i + 1)
+                if j2 < len(toks) and toks[j2][0] == "name":
+                    w = toks[j2][1].upper()
+                    if w in ("DO", "IF", "PROC", "PROCEDURE"):
+                        depth += 1
+                    elif w == "END":
+                        if depth == 0:
+                            _, i = self._until_semi(toks, j2 + 1)
+                            break
+                        depth -= 1
+            body.append(toks[i])
+            i += 1
+        else:
+            raise PreprocError("%%%s: missing %%END" % name)
+        stmts = self._parse_proc_body(
+            [t for t in body if t[0] not in ("ws", "comment")])
+        self.vars[name] = ("PROC", (params, stmts))
+        self.active.add(name)
+        return i
+
+    def _parse_proc_body(self, toks):
+        self._bt, self._bp = toks, 0
+        stmts = []
+        while self._bp < len(self._bt):
+            stmts.append(self._parse_stmt())
+        return stmts
+
+    def _bpeek(self):
+        return self._bt[self._bp] if self._bp < len(self._bt) \
+            else (None, None)
+
+    def _bnext(self):
+        t = self._bpeek()
+        self._bp += 1
+        return t
+
+    def _bexpect(self, text):
+        k, v = self._bnext()
+        if v is None or v.upper() != text.upper() and v != text:
+            raise PreprocError("%%PROC body: expected %r, found %r"
+                               % (text, v))
+
+    def _collect_expr(self, stops):
+        out = []
+        depth = 0
+        while self._bp < len(self._bt):
+            k, v = self._bpeek()
+            u = v.upper() if k == "name" else v
+            if depth == 0 and u in stops:
+                break
+            if v == "(":
+                depth += 1
+            elif v == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            out.append(self._bnext())
+        return out
+
+    def _parse_stmt(self):
+        k, v = self._bnext()
+        if k == "name":
+            w = v.upper()
+            if w == "RETURN":
+                self._bexpect("(")
+                expr = self._collect_expr({")"})
+                self._bexpect(")")
+                self._bexpect(";")
+                return ("RETURN", expr)
+            if w == "IF":
+                cond = self._collect_expr({"THEN"})
+                self._bexpect("THEN")
+                then = self._parse_stmt()
+                els = None
+                nk, nv = self._bpeek()
+                if nk == "name" and nv.upper() == "ELSE":
+                    self._bnext()
+                    els = self._parse_stmt()
+                return ("IF", cond, then, els)
+            if w == "DO":
+                nk, nv = self._bpeek()
+                if nv == ";":
+                    self._bnext()
+                    return ("BLOCK", self._parse_group())
+                var = None
+                if nk == "name":
+                    var = self._bnext()[1].upper()
+                    self._bexpect("=")
+                    start = self._collect_expr({"TO"})
+                    self._bexpect("TO")
+                    limit = self._collect_expr({"BY", ";"})
+                    step = None
+                    if self._bpeek()[1] and \
+                            self._bpeek()[1].upper() == "BY":
+                        self._bnext()
+                        step = self._collect_expr({";"})
+                    self._bexpect(";")
+                    return ("LOOP", var, start, limit, step,
+                            self._parse_group())
+                raise PreprocError("%PROC body: bad DO")
+            if w in ("DCL", "DECLARE"):
+                seg = self._collect_expr({";"})
+                self._bexpect(";")
+                decls = []
+                nm = None
+                for k2, v2 in seg:
+                    if k2 != "name":
+                        continue
+                    u = v2.upper()
+                    if u in ("FIXED", "CHARACTER", "CHAR"):
+                        if nm:
+                            decls.append((nm, "FIXED" if u == "FIXED"
+                                          else "CHARACTER"))
+                            nm = None
+                    else:
+                        if nm:
+                            decls.append((nm, "FIXED"))
+                        nm = u
+                if nm:
+                    decls.append((nm, "FIXED"))
+                return ("DCL", decls)
+            if self._bpeek()[1] == "=":
+                self._bnext()
+                expr = self._collect_expr({";"})
+                self._bexpect(";")
+                return ("SET", w, expr)
+        if v == ";":
+            return ("NULL",)
+        raise PreprocError("%%PROC body: unexpected %r" % v)
+
+    def _parse_group(self):
+        stmts = []
+        while True:
+            k, v = self._bpeek()
+            if k == "name" and v.upper() == "END":
+                self._bnext()
+                self._bexpect(";")
+                return stmts
+            if k is None:
+                raise PreprocError("%PROC body: missing END")
+            stmts.append(self._parse_stmt())
+
+    class _PPReturn(Exception):
+        def __init__(self, value):
+            self.value = value
+
+    def _exec_proc(self, name, arg_texts):
+        params, stmts = self.vars[name][1]
+        saved = dict(self.vars)
+        try:
+            for p_, a in zip(params, arg_texts):
+                toks = [t for t in _tokenize(a)
+                        if t[0] not in ("ws", "comment")]
+                try:
+                    val = self._eval(toks)
+                except PreprocError:
+                    val = a.strip()
+                self.vars[p_] = ("FIXED" if isinstance(val, int)
+                                 else "CHARACTER", val)
+            try:
+                for s in stmts:
+                    self._exec_pp_stmt(s)
+            except Preprocessor._PPReturn as r:
+                return r.value
+            return ""
+        finally:
+            self.vars = saved
+
+    def _exec_pp_stmt(self, s):
+        kind = s[0]
+        if kind == "RETURN":
+            raise Preprocessor._PPReturn(self._eval(list(s[1])))
+        if kind == "SET":
+            val = self._eval(list(s[2]))
+            typ = self.vars.get(s[1], ("FIXED", 0))[0]
+            if typ == "FIXED" and not isinstance(val, str):
+                val = int(val)
+            self.vars[s[1]] = (typ if typ in ("FIXED", "CHARACTER")
+                               else "FIXED", val)
+            return
+        if kind == "IF":
+            if self._truthy(self._eval(list(s[1]))):
+                self._exec_pp_stmt(s[2])
+            elif s[3] is not None:
+                self._exec_pp_stmt(s[3])
+            return
+        if kind == "BLOCK":
+            for t in s[1]:
+                self._exec_pp_stmt(t)
+            return
+        if kind == "LOOP":
+            v = int(self._eval(list(s[2])))
+            limit = int(self._eval(list(s[3])))
+            step = int(self._eval(list(s[4]))) if s[4] else 1
+            while (step >= 0 and v <= limit) or (step < 0 and v >= limit):
+                self.vars[s[1]] = ("FIXED", v)
+                for t in s[5]:
+                    self._exec_pp_stmt(t)
+                v += step
+            return
+        if kind == "DCL":
+            for nm, typ in s[1]:
+                self.vars[nm] = (typ, 0 if typ == "FIXED" else "")
+            return
+        if kind == "NULL":
+            return
+        raise PreprocError("bad %%PROC statement %r" % (kind,))
+
+    def _collect_call_args(self, toks, i):
+        """Raw argument texts of name(...) starting at the '('."""
+        depth = 0
+        args = []
+        cur = []
+        while i < len(toks):
+            k, v = toks[i]
+            if v == "(" and k == "op":
+                depth += 1
+                if depth == 1:
+                    i += 1
+                    continue
+            elif v == ")" and k == "op":
+                depth -= 1
+                if depth == 0:
+                    args.append("".join(t[1] for t in cur))
+                    return args, i + 1
+            elif v == "," and k == "op" and depth == 1:
+                args.append("".join(t[1] for t in cur))
+                cur = []
+                i += 1
+                continue
+            cur.append(toks[i])
+            i += 1
+        raise PreprocError("unbalanced ( in preprocessor call")
 
     def _skip_to_label(self, toks, i, label):
         while i < len(toks):
