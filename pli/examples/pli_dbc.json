@@ -7,5 +7,10 @@
     "driver": "ibm_db",
     "url": "jdbc:db2://localhost:25000/sample",
     "user": "maga1"
+  },
+  "DTT1": {
+    "driver": "ibm_db",
+    "url": "jdbc:db2://adt0.muc.allianz:6030/DTT1",
+    "user": "if7xm6f"
   }
 }
