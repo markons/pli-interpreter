@@ -109,6 +109,26 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   gets AUTHENTICATION=KERBEROS instead of PWD=, no password prompt;
   Windows SSPI/prior kinit supplies the ticket (typical for Db2 LUW —
   z/OS stays on password auth).
+- Kerberos + SSL together (`"ssl": true` alongside securityMechanism
+  11 — some Db2 LUW hosts mandate both, e.g. port 50200): ibm_db's
+  native CLI driver has no GSKit keystore for SSL, so this combo
+  routes through JDBC instead (jaydebeapi/JPype embeds a JVM;
+  `_connect_jdbc_kerberos_ssl` in sql.py). Needs jaydebeapi+JPype1, a
+  JVM, and an IBM Db2 JCC jar — `_find_jcc_jar` prefers DbVisualizer's
+  bundled jar (JCC 4.32.28) over the IBM Data Server Driver's
+  db2jcc4.jar (JCC 4.34.30 throws a DSS chained-parse error,
+  ERRORCODE=-4499, against TLS-1.3-capable servers even when
+  `-Djdk.tls.client.protocols=TLSv1.2` is forced); override via
+  `"jdbc_jar_path"`. `_create_jaas_config` writes a JAAS login config
+  pointing at the Kerberos ticket cache (Windows SSO or a prior
+  `kinit`); `"realm"` in pli_dbc.json is the CALLER's own realm for
+  the JAAS principal (e.g. "ALLIANZDE.ROOTDOM.NET") — NOT the DB2
+  server's realm, which only goes in `"kerberosServerPrincipal"`
+  (e.g. "db2agl1/host@SERVER.REALM"); swapping them still authenticates
+  with a valid ticket but the server-side GSS handshake then fails
+  with a GSSException. Cross-realm (user realm ≠ server realm, e.g.
+  AD trust): `-Djavax.security.auth.useSubjectCredsOnly=false` lets
+  Windows SSPI do the ticket referral (Java's own GSSAPI can't).
 - Precompiler-layer statements: CONNECT TO/RESET, SET CONNECTION,
   SELECT INTO (+100/-811), DECLARE/OPEN/FETCH/CLOSE cursor, COMMIT/
   ROLLBACK, WHENEVER (SQLERROR/SQLWARNING/NOT FOUND ×

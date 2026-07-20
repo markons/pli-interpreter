@@ -26,10 +26,31 @@ jdbc:db2://host:port/db URL is translated to an ibm_db DSN).  A missing
 "password" key triggers the interpreter's password prompt, unless
 "securityMechanism": "11" is set, which selects Kerberos (no password
 sent; Windows SSPI or a prior `kinit` supplies the ticket).
+
+Kerberos + SSL together (many Db2 LUW hosts mandate both, e.g. port
+50200) cannot go through ibm_db's native CLI driver -- it has no GSKit
+keystore for SSL -- so that combination routes through a JDBC driver
+(jaydebeapi/JPype embeds a JVM) instead. This needs: a JVM, jaydebeapi
+(pip install jaydebeapi JPype1), an IBM JCC jar, and a JAAS login
+config pointing at the Kerberos ticket cache (obtained via Windows SSO
+or a prior `kinit`). Extra pli_dbc.json keys for that path:
+"ssl" (true selects the JDBC path when combined with securityMechanism
+11), "jdbc_jar_path" (falls back to DbVisualizer's bundled jcc jar --
+JCC 4.32.28, needed for Kerberos -- then the IBM Data Server Driver's
+db2jcc4.jar), "kerberosServerPrincipal" (the DB2 server's Kerberos
+principal, e.g. "db2agl1/host@SERVER.REALM"; optional, leave unset for
+auto-discovery), "realm" (the CALLER's own Kerberos realm used to
+build the JAAS principal, e.g. "ALLIANZDE.ROOTDOM.NET" -- NOT the
+server's realm, which belongs only in kerberosServerPrincipal; a
+mismatch here causes a GSSException even with a valid ticket).
 """
+import base64
 import json
 import os
 import re
+import socket
+import ssl
+import tempfile
 
 from . import nodes as N
 
@@ -85,6 +106,119 @@ def parse_jdbc_db2(url):
             "database": m.group(3)}
 
 
+def get_server_ssl_cert_pem(host, port, timeout=10):
+    """Fetch the server's leaf certificate via a throwaway TLS handshake
+    and return the path to a temp PEM file (ibm_db's CLI driver takes a
+    PEM path as SSLServerCertificate; it cannot read JKS truststores)."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        with ctx.wrap_socket(sock) as ssock:
+            cert_der = ssock.getpeercert(binary_form=True)
+    pem = (b"-----BEGIN CERTIFICATE-----\n" +
+           base64.encodebytes(cert_der) +
+           b"-----END CERTIFICATE-----\n")
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".pem",
+                                      delete=False) as f:
+        f.write(pem)
+        return f.name
+
+
+def _find_jcc_jar(cfg):
+    if cfg.get("jdbc_jar_path", "").strip():
+        return cfg["jdbc_jar_path"].strip()
+    # JCC 4.32.28 (DbVisualizer's bundled jar) is required for Kerberos:
+    # JCC 4.34.30 (IBM Data Server Driver's db2jcc4.jar) throws a DSS
+    # chained-parse error against TLS 1.3-capable Db2 LUW servers even
+    # when TLSv1.2 is forced client-side.
+    dbviz_jar = (r"C:\Program Files\DbVisualizer\resources\dbinfo"
+                 r"\templates\driverTypes\db2\maven\com\ibm\db2\jcc"
+                 r"\11.5.8.0\jcc-11.5.8.0.jar")
+    ibm_jar = (r"C:\Program Files\IBM\IBM DATA SERVER DRIVER"
+               r"\java\db2jcc4.jar")
+    if os.path.exists(dbviz_jar):
+        return dbviz_jar
+    if os.path.exists(ibm_jar):
+        return ibm_jar
+    raise SQLError("no Db2 JCC jar found for the JDBC/Kerberos+SSL path "
+                   "(set \"jdbc_jar_path\" in pli_dbc.json, or install "
+                   "the IBM Data Server Driver / DbVisualizer)")
+
+
+def _create_jaas_config(username, realm=None):
+    """Write a JAAS login config pointing DB2 JCC at the Kerberos ticket
+    cache (obtained via Windows SSO or a prior `kinit`)."""
+    principal = "%s@%s" % (username, realm) if realm else username
+    win_user = os.environ.get("USERNAME", username).upper()
+    user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+    ticket_cache = os.path.join(user_profile,
+                                "krb5cc_%s" % win_user).replace("\\", "/")
+    cache_line = ('\n    ticketCache="%s"' % ticket_cache
+                 if os.path.exists(ticket_cache) else "")
+    module = ('    com.sun.security.auth.module.Krb5LoginModule required\n'
+              '    useTicketCache=true\n'
+              '    renewTGT=true\n'
+              '    doNotPrompt=true\n'
+              '    principal="%s"%s;' % (principal, cache_line))
+    contexts = ("DB2JccConfiguration", "com.ibm.db2.jcc.DB2JccConfiguration",
+               "com.sun.security.jgss.krb5.initiate", "gsslogin", "DB2")
+    content = "\n\n".join("%s {\n%s\n};" % (c, module) for c in contexts)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".conf",
+                                      delete=False) as f:
+        f.write(content)
+        return f.name
+
+
+def _connect_jdbc_kerberos_ssl(cfg, host, port, database, user):
+    """Kerberos + SSL via JDBC (jaydebeapi/JPype) -- the combination
+    ibm_db's native CLI driver cannot do (no GSKit keystore)."""
+    try:
+        import jaydebeapi
+    except ImportError as e:
+        raise SQLError("jaydebeapi not installed (pip install jaydebeapi "
+                       "JPype1) -- required for Kerberos+SSL Db2 "
+                       "connections: %s" % e)
+
+    realm = cfg.get("realm")
+    jaas_path = _create_jaas_config(user, realm)
+    dbviz_etc = os.path.join(os.environ.get("APPDATA", ""),
+                             "DbVisualizer", "dbvis_etc")
+    java_opts = [
+        "--add-opens=java.base/sun.security.action=ALL-UNNAMED",
+        "-Djava.security.auth.login.config=%s" % jaas_path,
+        "-Djavax.security.auth.useSubjectCredsOnly=false",
+        "-Djdk.tls.client.protocols=TLSv1.2",
+    ]
+    krb5_conf = os.path.join(dbviz_etc, "krb5.conf")
+    if os.path.exists(krb5_conf):
+        java_opts.append("-Djava.security.krb5.conf=%s" % krb5_conf)
+    truststore = os.path.join(dbviz_etc, "AMOSServerTruststore.jks")
+    if os.path.exists(truststore):
+        java_opts.append("-Djavax.net.ssl.trustStore=%s" % truststore)
+        java_opts.append("-Djavax.net.ssl.trustStorePassword=changeit")
+    java_tool_options = os.environ.get("JAVA_TOOL_OPTIONS", "")
+    os.environ["JAVA_TOOL_OPTIONS"] = (java_tool_options + " " +
+                                       " ".join(java_opts)).strip()
+
+    jar_path = _find_jcc_jar(cfg)
+    lic_dir = r"C:\Program Files\DbVisualizer\jdbc"
+    jars = [jar_path] + [
+        os.path.join(lic_dir, n)
+        for n in ("db2jcc_license_cisuz.jar", "db2jcc_license_cu.jar")
+        if os.path.exists(os.path.join(lic_dir, n))
+    ]
+
+    driver_args = {"securityMechanism": "11", "sslConnection": "true"}
+    krb_principal = cfg.get("kerberosServerPrincipal", "")
+    if krb_principal:
+        driver_args["kerberosServerPrincipal"] = krb_principal
+
+    jdbc_url = "jdbc:db2://%s:%d/%s" % (host, port, database)
+    return jaydebeapi.connect("com.ibm.db2.jcc.DB2Driver", jdbc_url,
+                              driver_args, jars)
+
+
 class Cursor:
     def __init__(self, select_text):
         self.select_text = select_text
@@ -138,49 +272,66 @@ class SqlRuntime:
                 path = os.path.join(self.config_dir, path)
             conn = sqlite3.connect(path)
         elif driver == "ibm_db":
-            try:
-                import ibm_db_dbi
-            except ImportError as first_err:
-                # Windows: the bundled Db2 clidriver DLLs are often not
-                # on the DLL search path; register them and retry
-                added = False
-                try:
-                    import site
-                    dirs = list(site.getsitepackages())
-                    dirs.append(site.getusersitepackages())
-                except Exception:
-                    dirs = []
-                for sp in dirs:
-                    bindir = os.path.join(sp, "clidriver", "bin")
-                    if os.path.isdir(bindir) and hasattr(os,
-                                                         "add_dll_directory"):
-                        os.add_dll_directory(bindir)
-                        os.environ["PATH"] = (bindir + os.pathsep +
-                                              os.environ.get("PATH", ""))
-                        added = True
-                if not added:
-                    raise SQLError("driver ibm_db not installed "
-                                   "(pip install ibm_db): %s" % first_err)
-                try:
-                    import ibm_db_dbi
-                except ImportError as e:
-                    raise SQLError("ibm_db is installed but its Db2 "
-                                   "client DLLs failed to load: %s" % e)
             p = parse_jdbc_db2(url) if url.lower().startswith("jdbc:") \
                 else {"host": cfg.get("host", "localhost"),
                       "port": cfg.get("port", 50000),
                       "database": cfg.get("database", url)}
             user = cfg.get("user", "")
-            dsn = ("DATABASE=%s;HOSTNAME=%s;PORT=%d;PROTOCOL=TCPIP;"
-                   "UID=%s;" % (p["database"], p["host"], p["port"], user))
-            if str(cfg.get("securityMechanism", "")) == "11":
-                # Kerberos: no password sent, Windows SSPI/kinit ticket
-                # cache handles the handshake (same as pli-tools-vscode's
-                # ibm_db path).
-                dsn += "AUTHENTICATION=KERBEROS;"
+            is_kerberos = str(cfg.get("securityMechanism", "")) == "11"
+            if is_kerberos and cfg.get("ssl"):
+                # Kerberos + SSL together needs a JVM: ibm_db's native CLI
+                # driver has no GSKit keystore for SSL (many Db2 LUW hosts,
+                # e.g. port 50200, mandate both at once).
+                conn = _connect_jdbc_kerberos_ssl(cfg, p["host"], p["port"],
+                                                  p["database"], user)
             else:
-                dsn += "PWD=%s;" % self._password(cfg, key)
-            conn = ibm_db_dbi.connect(dsn, "", "")
+                try:
+                    import ibm_db_dbi
+                except ImportError as first_err:
+                    # Windows: the bundled Db2 clidriver DLLs are often not
+                    # on the DLL search path; register them and retry
+                    added = False
+                    try:
+                        import site
+                        dirs = list(site.getsitepackages())
+                        dirs.append(site.getusersitepackages())
+                    except Exception:
+                        dirs = []
+                    for sp in dirs:
+                        bindir = os.path.join(sp, "clidriver", "bin")
+                        if os.path.isdir(bindir) and hasattr(
+                                os, "add_dll_directory"):
+                            os.add_dll_directory(bindir)
+                            os.environ["PATH"] = (bindir + os.pathsep +
+                                                  os.environ.get("PATH", ""))
+                            added = True
+                    if not added:
+                        raise SQLError("driver ibm_db not installed "
+                                       "(pip install ibm_db): %s"
+                                       % first_err)
+                    try:
+                        import ibm_db_dbi
+                    except ImportError as e:
+                        raise SQLError("ibm_db is installed but its Db2 "
+                                       "client DLLs failed to load: %s" % e)
+                dsn = ("DATABASE=%s;HOSTNAME=%s;PORT=%d;PROTOCOL=TCPIP;"
+                       "UID=%s;" % (p["database"], p["host"], p["port"],
+                                    user))
+                if is_kerberos:
+                    # Kerberos, no SSL: no password sent, Windows SSPI/
+                    # kinit ticket cache handles the handshake.
+                    dsn += "AUTHENTICATION=KERBEROS;"
+                else:
+                    dsn += "PWD=%s;" % self._password(cfg, key)
+                if cfg.get("ssl"):
+                    # SSL without Kerberos: ibm_db CAN do this via a
+                    # fetched leaf cert (no JKS truststore support, but a
+                    # PEM path works).
+                    dsn += "Security=SSL;"
+                    cert_path = get_server_ssl_cert_pem(p["host"],
+                                                        p["port"])
+                    dsn += "SSLServerCertificate=%s;" % cert_path
+                conn = ibm_db_dbi.connect(dsn, "", "")
         else:
             raise SQLError("unknown driver %r (supported: sqlite, ibm_db)"
                            % driver)

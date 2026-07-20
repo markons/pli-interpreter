@@ -220,6 +220,21 @@ Kerberos (typical for Db2 LUW): set `"securityMechanism": "11"` on an
 `AUTHENTICATION=KERBEROS` and Windows SSPI (or a prior `kinit`) supplies
 the ticket.
 
+Kerberos **+ SSL together** (some Db2 LUW hosts mandate both) can't go
+through `ibm_db`'s native CLI driver — it has no GSKit keystore for
+SSL — so add `"ssl": true` alongside `"securityMechanism": "11"` to
+route that connection through a JDBC driver instead
+(`pip install jaydebeapi JPype1`; needs a JVM and an IBM Db2 JCC jar —
+DbVisualizer's bundled jar or the IBM Data Server Driver's
+`db2jcc4.jar`, auto-detected, or set `"jdbc_jar_path"` explicitly). A
+JAAS login config is generated on the fly pointing at the Kerberos
+ticket cache (Windows SSO or a prior `kinit`). Extra keys:
+`"kerberosServerPrincipal"` (the DB2 server's principal, e.g.
+`"db2agl1/host@SERVER.REALM"`) and `"realm"` — **your own** Kerberos
+realm (e.g. `"ALLIANZDE.ROOTDOM.NET"`), not the server's realm, which
+only belongs in `kerberosServerPrincipal`; getting this backwards
+causes a `GSSException` even with a valid ticket.
+
 Not implemented (yet): NULL indicator variables (fetching NULL sets
 `SQLCODE` −305), dynamic SQL (`PREPARE`/`EXECUTE`/`EXECUTE IMMEDIATE`),
 positioned `UPDATE/DELETE ... WHERE CURRENT OF` (cursors are
