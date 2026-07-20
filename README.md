@@ -213,7 +213,8 @@ translated to a native DSN, and on Windows the bundled Db2 clidriver
 DLLs are put on the search path automatically).  A missing
 `"password"` key prompts at CONNECT — masked in the terminal for the
 CLI, a dialog in the IDE.  `examples/sqldemo_db2.pli` is the same demo
-against a real Db2.
+against a real Db2; `examples/sqldemo_kerberos.pli` connects via
+Kerberos (optionally + SSL/JDBC, see below).
 
 Kerberos (typical for Db2 LUW): set `"securityMechanism": "11"` on an
 `ibm_db` connection — no password field, no prompt; the DSN gets
