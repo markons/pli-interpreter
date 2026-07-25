@@ -1,4 +1,4 @@
-# Formal syntax of the pli interpreter (v0.6.0)
+# Formal syntax of the pli interpreter (v0.7.0)
 
 This is the grammar actually implemented by `pli/lexer.py` and
 `pli/parser.py` (the nonterminal names below match the yacc rules), in
@@ -127,6 +127,11 @@ full list = `reserved` table in `pli/lexer.py`).
 
 <bound_list>    ::= <bound> { ',' <bound> }
 <bound>         ::= <expr> | <expr> ':' <expr> | '*'       (* '*' = parameter *)
+                  | <expr> 'REFER' '(' ID ')'
+                    (* self-defining structure: extent taken from a
+                       sibling member's current value if available,
+                       else an enclosing-scope variable of that name;
+                       written back into the sibling afterwards *)
 
 <attr_seq>      ::= { <attr> }
 <attr>          ::= 'FIXED'   [ <precision> ]
@@ -147,10 +152,16 @@ full list = `reserved` table in `pli/lexer.py`).
                     (* known attribute identifiers only: POINTER PTR
                        POSITION BUILTIN EXTERNAL INTERNAL ALIGNED
                        UNALIGNED REAL COMPLEX ABNORMAL NORMAL EVENT
-                       TASK STREAM RECORD INPUT OUTPUT UPDATE KEYED
-                       PRINT TITLE ENVIRONMENT ENV SEQUENTIAL DIRECT
-                       BUFFERED UNBUFFERED — anything else is a
-                       compile-time error *)
+                       TASK AREA OFFSET STREAM RECORD INPUT OUTPUT
+                       UPDATE KEYED PRINT TITLE ENVIRONMENT ENV
+                       SEQUENTIAL DIRECT BUFFERED UNBUFFERED EXCLUSIVE
+                       — anything else is a compile-time error.
+                       AREA(size) sizes the pool (leaf-count budget);
+                       OFFSET(area) is accepted, tracked at ALLOCATE
+                       time.  ENTRY [(...)] [RETURNS(...)] declares a
+                       first-class entry variable UNLESS the name
+                       already names an actual procedure, in which
+                       case it is a descriptive prototype. *)
 
 <precision>     ::= '(' NUMBER [ ',' NUMBER ] ')'
 <length>        ::= <expr> | '*'
@@ -214,9 +225,11 @@ full list = `reserved` table in `pli/lexer.py`).
 
 <allocate_stmt> ::= ( 'ALLOCATE' | 'ALLOC' ) <alloc_item>
                         { ',' <alloc_item> } ';'
-<alloc_item>    ::= ID [ '(' <bound_list> ')' ] [ 'SET' '(' <ref> ')' ]
+<alloc_item>    ::= ID [ '(' <bound_list> ')' ] [ 'IN' '(' <ref> ')' ]
+                        [ 'SET' '(' <ref> ')' ]
                     (* bounds re-specify CONTROLLED extents at
-                       allocation time: ALLOCATE A(N); *)
+                       allocation time: ALLOCATE A(N);  IN(area)
+                       allocates a BASED variable inside an AREA *)
 <free_stmt>     ::= 'FREE' <id_list> ';'
 
 <display_stmt>  ::= 'DISPLAY' '(' <expr> ')' [ 'REPLY' '(' <ref> ')' ] ';'
@@ -413,6 +426,13 @@ they contain).
   (`ONCODE`, `DATE`, `NULL`, ...) without parentheses, and the
   distinction array-element vs. function call are resolved
   semantically, not syntactically.
+- Elementwise structure expressions (`S3 = S1 + S2;`, `S3 = S1*2;`,
+  `-S1`) require matching member shapes or scalar broadcast;
+  comparisons and `& |` on structure operands are not supported.
+- Assigning to an `ENTRY`-typed target evaluates a bare procedure
+  name as the entry itself rather than calling it; calling through an
+  `ENTRY` variable (`F(args)` / `CALL F(args)`) is otherwise identical
+  to calling the procedure by name.
 - Condition prefixes are honored for `(NOSIZE):` (silent truncation)
   and `(NOSTRINGRANGE):` (SUBSTR clamps its arguments), scoped to the
   prefixed statement.  `SUBSCRIPTRANGE` checking can not be disabled.

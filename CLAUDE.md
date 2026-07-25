@@ -52,8 +52,36 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   value must itself contain quotes.
 - `sql.py` EXEC SQL runtime — see SQL section.
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
-  byte overlay; UNSPEC works per-scalar via struct. BY NAME,
-  DO REPEAT, REGIONAL files, cross-sections A(*,2): unsupported.
+  byte overlay; UNSPEC works per-scalar via struct (still true as of
+  v0.7.0 — see below). DO REPEAT, REGIONAL(2/3), GENERIC: unsupported
+  (BY NAME v0.5, REGIONAL(1) v0.6, cross-sections v0.5 — this line was
+  stale, corrected 2026-07).
+- v0.7.0 additions (object-graph features; NOT byte-accurate storage
+  — see roadmap note below, that's a separate, larger effort):
+  REFER self-defining structures (bound tuple ("REFER",expr,name);
+  _resolve_bound prefers parent.members[name].value, else evals expr
+  in env, writes back into the sibling; wired into _make_entry (now
+  takes parent=), _build_members, _declare_struct_array, ALLOCATE
+  bounds). Structure aggregate expressions (_struct_binop +
+  _clone_struct_shape, mirrors _array_binop; wired into eval_BinOp/
+  eval_UnOp ahead of the PLIArray check). ENTRY variables (EntryValue
+  wrapper class; Decl base "ENTRY"; _declare_one only creates a real
+  variable when no Procedure already exists under that name, else
+  stays descriptive as before; exec_Assign peeks the target via
+  _is_entry_target/_eval_entry_expr so `F = PROC;` captures the entry
+  instead of calling it; _resolve_entry unwraps for CALL and for
+  eval_Ref's Variable+args branch). SCOPED OUT: GENERIC entry
+  selection and passing a bare procedure name to an ENTRY-typed
+  parameter — both documented as not implemented, not silently
+  dropped. AREA/OFFSET/EMPTY (Area class = logical pool, leaf-count
+  budget via _alloc_size, id()-keyed in interp.area_of; OFFSET decl
+  base reuses Pointer/NULL machinery — EMPTY() aliases NULL(); ALLOCATE
+  gained IN(area), alloc_item is now a 4-tuple
+  (name,set_ref,bounds,area) — check any code iterating stmt.items).
+  Grammar note: ref/sub_list already accepted '*' pre-0.7 for
+  cross-sections; REFER reuses the plain <bound> nonterminal so no new
+  ambiguity. stage10.pli demonstrates all four (member name DATA is
+  reserved — use a different name in examples).
 - v0.6.0 additions: separate compilation (run_files/run_multi concat
   top-level stmt lists; CLI takes multiple files; STATIC EXTERNAL
   shares via static_store key ("EXTERNAL", name) — EXTERNAL alone
@@ -159,8 +187,14 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   server-side cursors for WHERE CURRENT OF.
 - "Large apps" gaps: separate compilation/external procedures, IDE
   debugger (statement loop makes stepping easy), batch test harness.
-- Remaining Tier-1 language gaps after v0.3.0: multiple assignment
-  (A,B = 0), GET STRING ... EDIT, label arrays, separate compilation.
+- Remaining gaps after v0.7.0: byte-accurate BASED/DEFINED storage
+  overlay (the one feature that does NOT fit the current object-
+  reference model — needs a bytearray-backed storage representation
+  living alongside PLIStructure/Variable, scoped narrowly to BASED/
+  DEFINED rather than all storage; this is the recommended next big
+  effort), GENERIC entry selection, iSUB defining, DO REPEAT,
+  REGIONAL(2/3), sterling/scaled-exponent PICTUREs, 48-char set and
+  label arrays (deliberately dropped by owner).
 - Executable output plan (planned 2026-07, not started; owner asked
   "unix executables as compiler output"):
   - Phase 0 (hours): shebang support — lexer skips leading #! line so

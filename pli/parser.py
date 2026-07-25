@@ -28,7 +28,7 @@ MAX_ERRORS = 50
 KNOWN_ATTRIBUTES = {
     "POINTER", "PTR", "POSITION", "BUILTIN", "EXTERNAL", "INTERNAL",
     "ALIGNED", "UNALIGNED", "REAL", "COMPLEX", "ABNORMAL", "NORMAL",
-    "EVENT", "TASK",
+    "EVENT", "TASK", "AREA", "OFFSET",
     # file description attributes
     "STREAM", "RECORD", "INPUT", "OUTPUT", "UPDATE", "KEYED", "PRINT",
     "TITLE", "ENVIRONMENT", "ENV", "SEQUENTIAL", "DIRECT", "BUFFERED",
@@ -449,11 +449,14 @@ class PLIParser:
     def p_bound(self, p):
         """bound : expr
                  | expr COLON expr
-                 | STAR"""
+                 | STAR
+                 | expr REFERKW LPAREN ID RPAREN"""
         if len(p) == 2:
             p[0] = ("*",) if p[1] == "*" else (None, p[1])
-        else:
+        elif len(p) == 4:
             p[0] = (p[1], p[3])
+        else:
+            p[0] = ("REFER", p[1], p[4])
 
     def p_attr_seq(self, p):
         """attr_seq : attr_seq attr
@@ -581,24 +584,35 @@ class PLIParser:
         p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
 
     def p_alloc_item(self, p):
-        """alloc_item : ID
-                      | ID ID LPAREN ref RPAREN
-                      | ID LPAREN bound_list RPAREN
-                      | ID LPAREN bound_list RPAREN ID LPAREN ref RPAREN"""
-        if len(p) == 2:
-            p[0] = (p[1], None, None)
-        elif len(p) == 6 and p.slice[2].type == "ID":
-            if p[2] != "SET":
-                self._err("line %d: expected SET, found %r"
-                          % (p.lineno(2), p[2]))
-            p[0] = (p[1], p[4], None)
-        elif len(p) == 5:
-            p[0] = (p[1], None, p[3])
+        """alloc_item : ID alloc_opts"""
+        set_ref = bounds = area = None
+        for kind, val in p[2]:
+            if kind == "SET":
+                set_ref = val
+            elif kind == "BOUNDS":
+                bounds = val
+            elif kind == "IN":
+                area = val
+        p[0] = (p[1], set_ref, bounds, area)
+
+    def p_alloc_opts(self, p):
+        """alloc_opts : alloc_opts alloc_opt
+                      | empty"""
+        p[0] = (p[1] + [p[2]]) if len(p) == 3 else []
+
+    def p_alloc_opt(self, p):
+        """alloc_opt : LPAREN bound_list RPAREN
+                     | ID LPAREN ref RPAREN"""
+        if p.slice[1].type == "LPAREN":
+            p[0] = ("BOUNDS", p[2])
+        elif p[1] == "SET":
+            p[0] = ("SET", p[3])
+        elif p[1] == "IN":
+            p[0] = ("IN", p[3])
         else:
-            if p[5] != "SET":
-                self._err("line %d: expected SET, found %r"
-                          % (p.lineno(5), p[5]))
-            p[0] = (p[1], p[7], p[3])
+            self._err("line %d: expected SET or IN, found %r"
+                      % (p.lineno(1), p[1]))
+            p[0] = ("SET", p[3])
 
     def p_free_stmt(self, p):
         "free_stmt : FREE id_list SEMI"

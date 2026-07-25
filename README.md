@@ -151,6 +151,26 @@ REWRITE/DELETE/UNLOCK).  The `EVENT(e)` option on
 READ/WRITE/REWRITE/DELETE runs the operation asynchronously; its
 conditions are raised at `WAIT(e)`.
 
+**Object-graph extensions (v0.7.0)** — `REFER`: self-defining
+structures, `2 ARR(N REFER(N)) FIXED` — the extent is taken from a
+sibling member's current value (preferred) or an enclosing-scope
+variable of the same name, and written back into the sibling so it
+stays in sync. **Structure aggregate expressions**: elementwise
+`S3 = S1 + S2;`, `S3 = S1 * 2;`, `-S1` across matching structure
+shapes (comparisons and `& |` are not supported). **`ENTRY` variables**
+hold a procedure as a first-class value — `DCL F ENTRY(FIXED)
+RETURNS(FIXED); F = SOMEPROC; Y = F(5);` — assignment captures the
+entry rather than calling it, `F(args)`/`CALL F(args)` calls through
+it. (Passing a bare procedure name as an argument to an ENTRY-typed
+*parameter* is not yet supported — assign it to an ENTRY variable
+first.) `GENERIC` entry selection is not implemented. **`AREA`** /
+**`OFFSET`** / **`EMPTY`**: `DCL A AREA(1000); DCL O OFFSET(A);
+ALLOCATE recvar IN(A) SET(p);` — a logical allocation pool (this
+interpreter has no byte-addressable storage, so AREA capacity/`AREA`
+condition is leaf-count based, not byte-exact); `OFFSET` behaves as a
+POINTER tied to an area; `EMPTY` is OFFSET's null, usable bare like
+`NULL`.
+
 **Separate compilation** — `python -m pli main.pli sub1.pli ...`
 treats each file as a separately compiled external procedure; the one
 with `OPTIONS(MAIN)` is the entry point, cross-file `CALL`s just work,
@@ -232,7 +252,7 @@ and bit-string logic; ~75 builtins:
   ATAND SIND COSD TAND SINH COSH TANH ATANH ERF ERFC RANDOM`
 - *array*: `HBOUND LBOUND DIM SUM PROD`
 - *complex*: `REAL IMAG CONJG COMPLEX`
-- *storage*: `NULL ADDR ALLOCATION UNSPEC`
+- *storage*: `NULL EMPTY ADDR ALLOCATION UNSPEC`
 - *conditions/tasking/system*: `ONCODE ONCHAR ONSOURCE COMPLETION
   STATUS DATE TIME DATETIME`
 
@@ -244,9 +264,8 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 - BASED/pointer storage uses object references, not byte-addressable
   storage; `P->X` reinterprets the pointed-to object, not raw bytes.
 - Integer/integer division is not scale-preserving (see above).
-- `BY NAME` assignment, iSUB defining, AREA/OFFSET, `DO REPEAT`,
-  REGIONAL files, GENERIC entries, array cross-sections (`A(*,2)`),
-  and `%GOTO` backward jumps are not implemented.
+- iSUB defining, `DO REPEAT`, REGIONAL(2)/REGIONAL(3), `GENERIC` entry
+  selection, and `%GOTO` backward jumps are not implemented.
 - ON-unit resumption is at statement granularity; PUT LIST tab stops
   are fixed at 24 columns.
 

@@ -1,0 +1,78 @@
+/* v0.7.0: REFER self-defining structures, structure aggregate
+   expressions, ENTRY variables (procedures as values), AREA/OFFSET/
+   EMPTY logical storage pools                                       */
+S10: PROC OPTIONS(MAIN);
+   /* ---- REFER: self-defining structure ---- */
+   DCL 1 LINEBUF,
+         2 LEN FIXED INIT(5),
+         2 VALS(LEN REFER(LEN)) FIXED INIT(2, 4, 6, 8, 10);
+   DCL I FIXED;
+   PUT LIST('LEN =', LINEBUF.LEN);
+   DO I = 1 TO LINEBUF.LEN;
+      PUT EDIT(LINEBUF.VALS(I)) (F(4));
+   END;
+
+   /* ---- structure aggregate expressions ---- */
+   PUT SKIP(2);
+   BEGIN;
+      DCL 1 P1, 2 X FIXED INIT(3), 2 Y FIXED INIT(4);
+      DCL 1 P2, 2 X FIXED INIT(1), 2 Y FIXED INIT(1);
+      DCL 1 SUM, 2 X FIXED, 2 Y FIXED;
+      SUM = P1 + P2;
+      PUT LIST('P1+P2 =', SUM.X, SUM.Y);
+      SUM = P1 * 10;
+      PUT SKIP LIST('P1*10 =', SUM.X, SUM.Y);
+      SUM = -P1;
+      PUT SKIP LIST('-P1   =', SUM.X, SUM.Y);
+   END;
+
+   /* ---- ENTRY variables: procedures as values ---- */
+   PUT SKIP(2);
+   BEGIN;
+      DCL OP ENTRY(FIXED, FIXED) RETURNS(FIXED);
+      DCL R FIXED;
+      OP = ADD;
+      R = OP(3, 4);
+      PUT LIST('ADD(3,4) via entry var =', R);
+      OP = MUL;
+      R = OP(3, 4);
+      PUT SKIP LIST('MUL(3,4) via entry var =', R);
+   END;
+
+   /* ---- AREA / OFFSET / EMPTY ---- */
+   PUT SKIP(2);
+   BEGIN;
+      DCL POOL AREA(1000);
+      DCL 1 NODE BASED(P), 2 VAL FIXED, 2 NEXT POINTER;
+      DCL (P, HEAD, Q) POINTER;
+      DCL O OFFSET(POOL);
+
+      HEAD = EMPTY;
+      DO I = 1 TO 4;
+         ALLOCATE NODE IN(POOL) SET(P);
+         P -> VAL = I * 7;
+         P -> NEXT = HEAD;
+         HEAD = P;
+      END;
+      PUT LIST('list in POOL:');
+      Q = HEAD;
+      DO WHILE(Q ^= EMPTY);
+         PUT EDIT(Q -> VAL) (F(4));
+         Q = Q -> NEXT;
+      END;
+      O = HEAD;
+      PUT SKIP LIST('O = EMPTY?', O = EMPTY);
+   END;
+   PUT SKIP(2) LIST('done.');
+
+ADD: PROC(A, B) RETURNS(FIXED);
+   DCL (A, B) FIXED;
+   RETURN(A + B);
+END ADD;
+
+MUL: PROC(A, B) RETURNS(FIXED);
+   DCL (A, B) FIXED;
+   RETURN(A * B);
+END MUL;
+
+END S10;

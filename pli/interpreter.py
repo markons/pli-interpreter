@@ -339,6 +339,51 @@ class Pointer:
         return "NULL" if self.target is None else "PTR(%#x)" % id(self.target)
 
 
+class Area:
+    """A logical AREA storage pool: allocations are tracked by identity
+    and a leaf-count budget (this interpreter has no byte-addressable
+    storage, so AREA size/overflow is approximate, not byte-exact)."""
+    def __init__(self, name, capacity=None):
+        self.name = name
+        self.capacity = capacity     # None = unbounded
+        self.used = 0
+        self.live = {}               # id(obj) -> size, for FREE/bookkeeping
+
+    def alloc(self, obj, size):
+        if self.capacity is not None and self.used + size > self.capacity:
+            raise PLICondition("AREA", "AREA %s overflow" % self.name,
+                               qual=self.name)
+        self.used += size
+        self.live[id(obj)] = size
+
+    def free(self, obj):
+        size = self.live.pop(id(obj), None)
+        if size is not None:
+            self.used -= size
+
+
+class EntryValue:
+    """An ENTRY variable's value: a reference to a procedure (or
+    SecondaryEntry), usable as a first-class value and called through
+    the variable that holds it."""
+    __slots__ = ("proc",)
+
+    def __init__(self, proc=None):
+        self.proc = proc
+
+    def __eq__(self, other):
+        return isinstance(other, EntryValue) and self.proc is other.proc
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return id(self.proc)
+
+    def __repr__(self):
+        return "ENTRY(%s)" % (self.proc.name if self.proc else "NULL")
+
+
 class BasedVar:
     """A BASED variable: a template instantiated by ALLOCATE, referenced
     through its declared pointer (or explicit P-> qualification)."""
@@ -430,6 +475,13 @@ def default_value(decl):
         return None
     if decl.base == "POINTER":
         return Pointer(None)
+    if decl.base == "OFFSET":
+        return Pointer(None)          # OFFSET's EMPTY is POINTER's NULL
+    if decl.base == "AREA":
+        return Area("(unnamed)", decl.length if isinstance(decl.length, int)
+                    else None)
+    if decl.base == "ENTRY":
+        return EntryValue(None)
     if decl.base == "COMPLEX":
         return 0j
     if decl.base == "EVENT":
@@ -568,10 +620,20 @@ def convert(value, decl):
         if value is not None and not isinstance(value, LabelValue):
             raise PLIError("cannot assign %r to a LABEL variable" % (value,))
         return value
-    if decl.base == "POINTER":
+    if decl.base in ("POINTER", "OFFSET"):
         if not isinstance(value, Pointer):
-            raise PLIError("cannot assign %r to a POINTER" % (value,))
+            raise PLIError("cannot assign %r to a %s"
+                           % (value, decl.base))
         return Pointer(value.target)
+    if decl.base == "AREA":
+        if not isinstance(value, Area):
+            raise PLIError("cannot assign %r to an AREA" % (value,))
+        return value
+    if decl.base == "ENTRY":
+        if not isinstance(value, EntryValue):
+            raise PLIError("cannot assign %r to an ENTRY variable"
+                           % (value,))
+        return EntryValue(value.proc)
     if decl.base == "PIC":
         if decl.pic.is_char:
             checked = decl.pic.validate_char(to_string(value))
@@ -662,6 +724,7 @@ class Interpreter:
         self.static_store = {}   # id(DeclItem) -> retained STATIC entry
         self.proc_stack = []     # names of active procedures (ONLOC)
         self.checked = set()     # variables under (CHECK(...)): prefixes
+        self.area_of = {}        # id(allocated obj) -> owning Area
         self.page_size = 60      # SYSPRINT PAGESIZE
         self.line_no = 1         # current line on the page (LINENO)
         self.last_count = 0      # items moved by last GET/PUT (COUNT)
@@ -925,7 +988,14 @@ class Interpreter:
     def _declare_one(self, name, item, env):
         kinds = {k for k, _ in item.attrs}
         if "ENTRY" in kinds or "ENTRY_RETURNS" in kinds:
-            return    # entry declarations are descriptive; never shadow
+            existing = env.lookup(name)
+            if isinstance(existing, Procedure):
+                return   # prototype for an actual procedure: descriptive
+            # no such procedure: a real ENTRY-typed variable (can hold
+            # a procedure reference assigned/passed as a first-class value)
+            decl = Decl("ENTRY")
+            env.declare(name, Variable(EntryValue(None), decl))
+            return
         if "FILE" in kinds:
             f = PLIFile(name)
             for k, v in item.attrs:
@@ -1016,17 +1086,37 @@ class Interpreter:
                 out.append(it)            # pre-0.3 plain expression
         return out
 
-    def _make_entry(self, name, item, env):
+    def _resolve_bound(self, b, env, parent=None):
+        """Resolve one array-dimension bound.  A REFER(name) bound takes
+        its extent from the CURRENT value of a sibling member `name`
+        already built in `parent` (self-defining structure idiom:
+        `2 N FIXED, 2 ARR(N REFER(N)) FIXED;`) if available, else from
+        `name`/expr in the enclosing scope (BASED structure allocated
+        with the count supplied by an outer variable); either way the
+        resolved extent is written back into the sibling so it stays
+        in sync with the array's actual size."""
+        if b == ("*",):
+            raise PLIError("'*' bounds only valid for parameters")
+        if b[0] == "REFER":
+            _, expr, refer_name = b
+            sib = parent.members.get(refer_name) if parent is not None \
+                else None
+            if isinstance(sib, Variable):
+                hi = int(to_number(sib.value))
+            else:
+                hi = int(to_number(self.eval(expr, env)))
+            if isinstance(sib, Variable):
+                sib.value = convert(hi, sib.decl)
+            return 1, hi
+        lo = 1 if b[0] is None else int(to_number(self.eval(b[0], env)))
+        hi = int(to_number(self.eval(b[1], env)))
+        return lo, hi
+
+    def _make_entry(self, name, item, env, parent=None):
         decl = self._resolve_attrs(name, item.attrs, env)
         init = next((val for kind, val in item.attrs if kind == "INIT"), None)
         if item.dims is not None:
-            bounds = []
-            for b in item.dims:
-                if b == ("*",):
-                    raise PLIError("'*' bounds only valid for parameters")
-                lo = 1 if b[0] is None else int(to_number(self.eval(b[0], env)))
-                hi = int(to_number(self.eval(b[1], env)))
-                bounds.append((lo, hi))
+            bounds = [self._resolve_bound(b, env, parent) for b in item.dims]
             arr = PLIArray(bounds, decl)
             if init is not None:
                 vals = self._expand_init(init, env)
@@ -1035,6 +1125,8 @@ class Interpreter:
                         arr.data[i] = convert(self.eval(vals[i], env), decl)
             return arr
         value = default_value(decl)
+        if isinstance(value, Area):
+            value.name = name
         if init is not None:
             vals = self._expand_init(init, env)
             if vals and vals[0] is not None:
@@ -1085,13 +1177,7 @@ class Interpreter:
         env.declare(name, struct)
 
     def _declare_struct_array(self, name, root, subitems, env):
-        bounds = []
-        for b in root.dims:
-            if b == ("*",):
-                raise PLIError("'*' bounds only valid for parameters")
-            lo = 1 if b[0] is None else int(to_number(self.eval(b[0], env)))
-            hi = int(to_number(self.eval(b[1], env)))
-            bounds.append((lo, hi))
+        bounds = [self._resolve_bound(b, env) for b in root.dims]
         n = 1
         for lo, hi in bounds:
             n *= (hi - lo + 1)
@@ -1157,7 +1243,7 @@ class Interpreter:
                 parent.members[nm] = sub
                 i = self._build_members(sub, items, i + 1, it.level, env)
             else:
-                parent.members[nm] = self._make_entry(nm, it, env)
+                parent.members[nm] = self._make_entry(nm, it, env, parent)
                 i += 1
         return i
 
@@ -1232,6 +1318,12 @@ class Interpreter:
                     base = "COMPLEX"
                 elif gname == "EVENT":
                     base = "EVENT"
+                elif gname == "AREA":
+                    base = "AREA"
+                    if val[1]:
+                        length = int(to_number(self.eval(val[1][0], env)))
+                elif gname == "OFFSET":
+                    base = "OFFSET"
                 elif gname in ("POSITION", "BUILTIN", "EXTERNAL", "INTERNAL",
                                "ALIGNED", "UNALIGNED", "REAL", "ABNORMAL",
                                "NORMAL", "TASK"):
@@ -1248,7 +1340,12 @@ class Interpreter:
         return Decl(base, length, varying, prec, pic)
 
     def exec_Assign(self, stmt, env):
-        value = self.eval(stmt.value, env)
+        target0 = stmt.target[0] if isinstance(stmt.target, list) \
+            else stmt.target
+        if self._is_entry_target(target0, env):
+            value = self._eval_entry_expr(stmt.value, env)
+        else:
+            value = self.eval(stmt.value, env)
         if getattr(stmt, "byname", False):    # S1 = S2, BY NAME;
             dst = self.eval(stmt.target, env)
             if not isinstance(dst, PLIStructure) or \
@@ -1262,6 +1359,36 @@ class Interpreter:
                 self.assign_target(t, value, env)
         else:
             self.assign_target(stmt.target, value, env)
+
+    def _is_entry_target(self, target, env):
+        if not isinstance(target, N.Ref) or target.args is not None:
+            return False
+        entry = env.lookup(target.name)
+        return isinstance(entry, Variable) and entry.decl.base == "ENTRY"
+
+    def _eval_entry_expr(self, node, env):
+        """Evaluate an expression in ENTRY-value context: a bare
+        reference to a procedure/entry variable yields the entry value
+        itself rather than calling it (as it would in ordinary
+        expression context)."""
+        if isinstance(node, N.Ref) and node.args is None:
+            entry = env.lookup(node.name)
+            if isinstance(entry, Procedure):
+                return EntryValue(entry)
+            if isinstance(entry, Variable) and entry.decl.base == "ENTRY":
+                return entry.value
+        return self.eval(node, env)
+
+    def _resolve_entry(self, entry, ctx_name, lineno):
+        """Unwrap an ENTRY-typed Variable to the Procedure it holds."""
+        if isinstance(entry, Variable) and entry.decl.base == "ENTRY":
+            proc = entry.value.proc if isinstance(entry.value, EntryValue) \
+                else None
+            if proc is None:
+                raise PLIError("line %d: %s: uninitialized ENTRY variable"
+                               % (lineno, ctx_name))
+            return proc
+        return entry
 
     def _assign_by_name(self, dst, src):
         """Structure assignment matching member names (recursively)."""
@@ -1512,7 +1639,8 @@ class Interpreter:
         self.assign_target(target, new, env)
 
     def exec_CallStmt(self, stmt, env):
-        entry = env.lookup(stmt.name)
+        entry = self._resolve_entry(env.lookup(stmt.name), stmt.name,
+                                    stmt.lineno)
         if not isinstance(entry, Procedure):
             raise PLIError("line %d: %s is not a procedure"
                            % (stmt.lineno, stmt.name))
@@ -2314,6 +2442,14 @@ class Interpreter:
         if isinstance(entry, DefinedVar):
             return self._defined_read(entry, env)
         if isinstance(entry, Variable):
+            if entry.decl.base == "ENTRY" and node.args is not None:
+                proc = self._resolve_entry(entry, node.name, node.lineno)
+                cells = [self._arg_cell(a, env) for a in node.args]
+                result = self.call_procedure(proc, cells)
+                if result is None:
+                    raise PLIError("procedure %s returned no value"
+                                   % node.name)
+                return result
             if node.args is not None:
                 raise PLIError("line %d: %s is not an array/function"
                                % (node.lineno, node.name))
@@ -2425,14 +2561,20 @@ class Interpreter:
         return entry
 
     def exec_AllocStmt(self, stmt, env):
-        for name, set_ref, bounds in stmt.items:
+        for name, set_ref, bounds, area_ref in stmt.items:
             entry = env.lookup(name)
+            area = self.eval(area_ref, env) if area_ref is not None else None
+            if area is not None and not isinstance(area, Area):
+                raise PLIError("ALLOCATE %s IN(...): not an AREA" % name)
             if isinstance(entry, BasedVar):
                 alloc = self._instantiate(entry.name, entry.item,
                                           entry.subitems, env, bounds)
                 ptr_ref = set_ref or entry.ptr_ref
                 if ptr_ref is None:
                     raise PLIError("ALLOCATE %s: no SET pointer" % name)
+                if area is not None:
+                    area.alloc(alloc, self._alloc_size(alloc))
+                    self.area_of[id(alloc)] = area
                 self.assign_target(ptr_ref, Pointer(alloc), env)
             elif isinstance(entry, Controlled):
                 entry.stack.append(self._instantiate(
@@ -2440,6 +2582,13 @@ class Interpreter:
                     getattr(entry, "subitems", []), env, bounds))
             else:
                 raise PLIError("ALLOCATE %s: not BASED or CONTROLLED" % name)
+
+    def _alloc_size(self, obj):
+        if isinstance(obj, PLIStructure):
+            return max(1, sum(1 for _ in obj.leaves()))
+        if isinstance(obj, PLIArray):
+            return max(1, len(obj.data))
+        return 1
 
     def _instantiate(self, name, item, subitems, env, bounds=None):
         if subitems:
@@ -2454,10 +2603,7 @@ class Interpreter:
             for b in bounds:
                 if b == ("*",):
                     raise PLIError("ALLOCATE %s: '*' bound invalid" % name)
-                lo = 1 if b[0] is None else int(to_number(
-                    self.eval(b[0], env)))
-                hi = int(to_number(self.eval(b[1], env)))
-                bl.append((lo, hi))
+                bl.append(self._resolve_bound(b, env))
             return PLIArray(bl, decl)
         return self._make_entry(name, item, env)
 
@@ -2466,6 +2612,11 @@ class Interpreter:
             entry = env.lookup(name)
             if isinstance(entry, BasedVar):
                 if entry.ptr_ref is not None:
+                    ptr = self.eval(entry.ptr_ref, env)
+                    if isinstance(ptr, Pointer) and ptr.target is not None:
+                        area = self.area_of.pop(id(ptr.target), None)
+                        if area is not None:
+                            area.free(ptr.target)
                     self.assign_target(entry.ptr_ref, Pointer(None), env)
             elif isinstance(entry, Controlled):
                 if not entry.stack:
@@ -2833,6 +2984,15 @@ class Interpreter:
             sign = -1 if node.op == "MINUS" else 1
             out.data = [sign * to_number(x) for x in v.data]
             return out
+        if isinstance(v, PLIStructure) and node.op in ("MINUS", "PLUS"):
+            sign = -1 if node.op == "MINUS" else 1
+            out = self._clone_struct_shape(v)
+            for leaf, src in zip(out.leaves(), v.leaves()):
+                if isinstance(leaf, PLIArray):
+                    leaf.data = [sign * to_number(x) for x in src.data]
+                else:
+                    leaf.value = sign * to_number(src.value)
+            return out
         if node.op == "MINUS":
             return -to_number(v)
         if node.op == "PLUS":
@@ -2847,6 +3007,8 @@ class Interpreter:
         op = node.op
         left = self.eval(node.left, env)
         right = self.eval(node.right, env)
+        if isinstance(left, PLIStructure) or isinstance(right, PLIStructure):
+            return self._struct_binop(op, left, right, node)
         if isinstance(left, PLIArray) or isinstance(right, PLIArray):
             return self._array_binop(op, left, right, node)
         if op in ("AND", "OR"):
@@ -2890,6 +3052,55 @@ class Interpreter:
             raise PLICondition("ZERODIVIDE",
                                "line %d: division by zero" % node.lineno)
         raise PLIError("unknown operator %s" % op)
+
+    def _clone_struct_shape(self, model):
+        """A fresh PLIStructure with the same member names/nesting as
+        `model` but default-valued leaves (used to hold an aggregate
+        expression's computed result)."""
+        out = PLIStructure(model.name)
+        out.spec = model.spec
+        for name, m in model.members.items():
+            if isinstance(m, PLIStructure):
+                out.members[name] = self._clone_struct_shape(m)
+            elif isinstance(m, PLIArray):
+                out.members[name] = PLIArray(m.bounds, m.decl)
+            else:
+                out.members[name] = Variable(default_value(m.decl), m.decl)
+        return out
+
+    def _struct_binop(self, op, left, right, node):
+        """Elementwise structure expressions: S3 = S1 + S2; (matching
+        shapes, paired leaf by leaf) or S3 = S1 * 2; (scalar broadcast)."""
+        if op in ("EQ", "NE", "LT", "LE", "GT", "GE", "AND", "OR"):
+            raise PLIError("line %d: %s not supported on structure "
+                           "operands" % (node.lineno, op))
+        ls = left if isinstance(left, PLIStructure) else None
+        rs = right if isinstance(right, PLIStructure) else None
+        lleaves = list(ls.leaves()) if ls is not None else None
+        rleaves = list(rs.leaves()) if rs is not None else None
+        if lleaves is not None and rleaves is not None and \
+                len(lleaves) != len(rleaves):
+            raise PLIError("line %d: structure operands have different "
+                           "shapes" % node.lineno)
+        out = self._clone_struct_shape(ls or rs)
+        outleaves = list(out.leaves())
+        for i, leaf in enumerate(outleaves):
+            a = lleaves[i] if lleaves is not None else left
+            b = rleaves[i] if rleaves is not None else right
+            if isinstance(leaf, PLIArray):
+                av = a if isinstance(a, PLIArray) else None
+                bv = b if isinstance(b, PLIArray) else None
+                for k in range(len(leaf.data)):
+                    x = av.data[k] if av is not None else \
+                        (a.value if isinstance(a, Variable) else a)
+                    y = bv.data[k] if bv is not None else \
+                        (b.value if isinstance(b, Variable) else b)
+                    leaf.data[k] = self._apply_scalar_op(op, x, y, node)
+            else:
+                av = a.value if isinstance(a, Variable) else a
+                bv = b.value if isinstance(b, Variable) else b
+                leaf.value = self._apply_scalar_op(op, av, bv, node)
+        return out
 
     def _array_binop(self, op, left, right, node):
         """Elementwise array expressions: A + B, A * 2, A || '.', -A.
@@ -3002,7 +3213,7 @@ class Interpreter:
 
 _NILADIC_BUILTINS = {"DATE", "TIME", "DATETIME", "ONCODE", "ONCHAR",
                      "ONSOURCE", "ONLOC", "ONFILE", "ONKEY",
-                     "NULL", "RANDOM", "LINENO", "COUNT"}
+                     "NULL", "EMPTY", "RANDOM", "LINENO", "COUNT"}
 _UNEVALUATED_BUILTINS = {"HBOUND", "LBOUND", "DIM", "ADDR", "ALLOCATION",
                          "LINENO", "COUNT"}
 
@@ -3014,7 +3225,7 @@ _BUILTINS = {
     "TRIM", "LOWERCASE", "UPPERCASE", "CHAR", "BIT", "FIXED", "FLOAT",
     "BINARY", "DECIMAL", "HBOUND", "LBOUND", "DIM", "DATE", "TIME",
     "ONCODE", "ONCHAR", "ONSOURCE", "ONLOC", "ONFILE", "ONKEY",
-    "NULL", "ADDR", "ALLOCATION", "UNSPEC",
+    "NULL", "EMPTY", "ADDR", "ALLOCATION", "UNSPEC",
     "REAL", "IMAG", "CONJG", "COMPLEX", "COMPLETION", "STATUS",
     "LEFT", "RIGHT", "CENTER", "CENTRE", "REVERSE", "SEARCH", "SEARCHR",
     "VERIFYR", "TALLY", "HIGH", "LOW", "BOOL", "STRING",
@@ -3291,7 +3502,7 @@ def builtin_dispatch(interp, name, args, node, env):
         if not isinstance(args[0], EventValue):
             raise PLIError("STATUS needs an EVENT variable")
         return args[0].status
-    if name == "NULL":
+    if name in ("NULL", "EMPTY"):
         return Pointer(None)
     if name == "ADDR":
         ref = node.args[0]
