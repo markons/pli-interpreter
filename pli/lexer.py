@@ -51,6 +51,7 @@ reserved = {
     "DISPLAY": "DISPLAY",
     "ENTRY": "ENTRYKW",
     "LOCATE": "LOCATE", "UNLOCK": "UNLOCK",
+    "REFER": "REFERKW",
 }
 
 tokens = [
