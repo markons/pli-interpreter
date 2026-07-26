@@ -1,0 +1,56 @@
+name: Release binaries
+
+# Builds a self-contained pli CLI executable for Windows and Linux and
+# attaches both to the GitHub Release for the pushed tag.  There is no
+# cross-compilation: each OS in the matrix builds its own native
+# binary via scripts/build.py (PyInstaller), matching what you would
+# get running that script by hand on that platform.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}   # allows a manual run from the Actions tab
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Run example regression (sanity check before packaging)
+        shell: bash
+        run: |
+          set -e
+          python -m pli pli/examples/hello.pli
+          python -m pli pli/examples/stage10.pli
+          echo "3 1 2 3" | python -m pli pli/examples/average.pli
+
+      - name: Build
+        run: python scripts/build.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pli-${{ matrix.os }}
+          path: dist/*.zip
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          fail_on_unmatched_files: true

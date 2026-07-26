@@ -24,6 +24,16 @@ from .picture import Picture, PicStr, PictureError
 from .fixeddec import FixedDec, FixedOverflow, SizeError
 
 
+def _strip_shebang(source):
+    """Allow #!/usr/bin/env pli as the source's first line (Unix
+    executable scripts): blank it out so line numbers in error
+    messages stay accurate."""
+    if source.startswith("#!"):
+        nl = source.find("\n")
+        return source[nl:] if nl >= 0 else ""
+    return source
+
+
 class PLIError(Exception):
     pass
 
@@ -750,6 +760,7 @@ class Interpreter:
         self.include_dir = sources[0][1] if sources else "."
         program = []
         for source, incdir in sources:
+            source = _strip_shebang(source)
             expanded = preprocess(source, incdir)
             program.extend(self.parser.parse(expanded) or [])
         genv = Environment()

@@ -11,3 +11,9 @@ parsetab.py
 
 # data files created by PL/I record I/O examples
 *.dat
+
+# PyInstaller build output (built by scripts/build.py or CI; release
+# binaries are attached to GitHub Releases, not committed)
+/build/
+/dist/
+*.spec

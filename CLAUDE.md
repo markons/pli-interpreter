@@ -195,19 +195,53 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   effort), GENERIC entry selection, iSUB defining, DO REPEAT,
   REGIONAL(2/3), sterling/scaled-exponent PICTUREs, 48-char set and
   label arrays (deliberately dropped by owner).
-- Executable output plan (planned 2026-07, not started; owner asked
-  "unix executables as compiler output"):
-  - Phase 0 (hours): shebang support — lexer skips leading #! line so
-    `#!/usr/bin/env pli` + chmod +x makes .pli files executable.
-  - Phase 1 (days): `pli-build prog.pli -o prog` via PyInstaller =
-    self-contained single-file binaries (no Python needed on target);
-    build per-OS via GitHub Actions release matrix. ~15-30MB, ~1s
-    startup, NO speedup; ibm_db needs clidriver tree collected.
-  - Phase 2: compose with the transpile-to-Python backend for speed.
-  - Phase 3 (months, deferred): true native — emit C (setjmp/longjmp
-    for GOTO/ON, ~5-8k-line C runtime) OR preferably via the Rust
-    track: shared runtime, `plirs build` appending AST to interpreter
-    binary (deno-compile trick) or emit-Rust + cargo. llvmlite saves
-    nothing (runtime lib is the cost center).
-  - Recommendation given: do 0+1 together (<1 week) when asked; defer
-    3 until transpiler proves insufficient or Rust port is greenlit.
+- Executable output: Phase 0+1 DONE in v0.8.0 (CLI-only scope, per
+  owner — IDE not packaged). _strip_shebang() in interpreter.py
+  (module-level fn, called from run_multi before preprocess) blanks a
+  leading #! line, preserving line numbers.
+  scripts/build.py has TWO modes (owner explicitly wanted per-program
+  compilation, not just a frozen interpreter — this was a real
+  misunderstanding mid-build, corrected once flagged):
+    1. `build.py program.pli [more...] [-o name]` — PER-PROGRAM
+       COMPILE, the main use case. Reads the source(s), calls
+       pli.preproc.preprocess() ONCE at build time (fully expanding
+       %INCLUDE/%DO/%PROC — this is legitimate since the preprocessor's
+       whole job is "produce final source text," doing it once at
+       build time instead of every run is strictly correct), embeds
+       the expanded text via repr() into a generated
+       build/pyinstaller/<name>/_program_entry.py that calls
+       interp.run_multi(SOURCES) directly with NO argv handling — the
+       resulting exe is fully standalone/argument-free. Multi-file
+       args = separate-compiled units, same as run_files. Verified:
+       %INCLUDE baked in (ran copied exe from %TEMP%, no access to the
+       include member, still worked), multi-file (stage9+stage9sub),
+       and real SYSIN input via a piped run of the built average.exe
+       (the build script's own smoke test uses EMPTY stdin + 15s
+       timeout + does NOT fail the build on nonzero exit, since that's
+       the compiled PROGRAM's business, not the build's — only "exe
+       not found" after PyInstaller runs fails the build).
+    2. `build.py` (no args) — the original generic reusable
+       interpreter, `pli.exe program.pli` for ANY program afterwards;
+       unchanged from the first pass, this is what populates the
+       Releases page via CI.
+  scripts/pli_cli_entry.py is the PyInstaller entry for mode 2
+  (imports pli.__main__ as an absolute import so relative imports
+  inside the package resolve — do NOT point PyInstaller at
+  pli/__main__.py directly, that breaks relative imports; same
+  ROOT-sys.path.insert trick used in the generated per-program entry).
+  write_tables=False in parser.py already avoids PLY writing
+  parsetab/parser.out into the frozen temp dir (verified no issue).
+  .github/workflows/release.yml only builds mode 2 (windows-latest +
+  ubuntu-latest matrix, triggers on v* tag push, uploads to the
+  GitHub Release via softprops/action-gh-release) — mode 1 has no CI
+  hook, it's a local/on-demand developer tool. Verified locally on
+  Windows: interpreter exe 25MB, per-program exes similar; runs from
+  an unrelated cwd; %INCLUDE/separate-compilation/EVENT-IO/
+  sqlite-EXEC-SQL all work frozen in both modes. Deliberately NOT
+  bundled: ibm_db (redistribution/size). NOT built/verified: Linux
+  binary (only via CI once pushed — no Linux machine available here),
+  macOS.
+  - Phase 2 (still open): compose with the transpile-to-Python backend
+    for speed once that exists.
+  - Phase 3 (still deferred): true native (C or, preferably, via the
+    Rust track if greenlit — see below).
