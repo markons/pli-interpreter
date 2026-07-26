@@ -12,9 +12,14 @@ on:
       - "v*"
   workflow_dispatch: {}   # allows a manual run from the Actions tab
 
+permissions:
+  contents: write   # required for softprops/action-gh-release to
+                    # create/update the release and attach binaries
+
 jobs:
   build:
     strategy:
+      fail-fast: false   # a failure on one OS must not cancel the other
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
