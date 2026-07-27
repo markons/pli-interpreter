@@ -13,7 +13,8 @@ SQLDEMO: PROC OPTIONS(MAIN);
    EXEC SQL CONNECT TO AZDO0D1O;
    PUT LIST('connected, sqlcode =', SQLCODE);
 
-   EXEC SQL SELECT 1 INTO :X FROM SYSIBM.SYSDUMMY1;
+   /*EXEC SQL SELECT 1 INTO :X FROM SYSIBM.SYSDUMMY1;*/
+   exec sql select count(*) into :x from abs.tvertrag;
    PUT SKIP LIST('select ok, x =', X, 'sqlcode =', SQLCODE);
 
    EXEC SQL CONNECT RESET;
