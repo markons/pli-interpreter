@@ -13,6 +13,12 @@ Python 3.10+ and:
 pip install -r requirements.txt      # just ply
 ```
 
+Or skip Python entirely: download a self-contained CLI executable
+from the [Releases page](../../releases) (Windows and Linux, x64) —
+no interpreter, no `pip install`, just `pli program.pli`. Runs the
+sqlite `EXEC SQL` backend out of the box; Db2 (`ibm_db`) support needs
+the source install (see *Building standalone executables* below).
+
 ## Usage
 
 Run a program from the repo root:
@@ -293,6 +299,71 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 - ON-unit resumption is at statement granularity; PUT LIST tab stops
   are fixed at 24 columns.
 
+## Building standalone executables
+
+```
+pip install pyinstaller
+```
+
+**Compile one PL/I program into its own executable** — the main
+event: `stage6.pli` in, a standalone `stage6.exe` / `stage6` out that
+runs with **no arguments**, no Python, and no dependency on the
+original source file or its directory:
+
+```
+python scripts/build.py pli\examples\stage6.pli
+dist\stage6.exe
+```
+
+The `%` compile-time preprocessor (`%INCLUDE`, `%DO`, `%PROC`, ...) is
+fully expanded once at build time and the resulting source is
+embedded directly in the executable — `%INCLUDE` members do not need
+to travel with the binary. Several files compile together as one
+separately-compiled program, exactly like `python -m pli` does:
+
+```
+python scripts/build.py pli\examples\stage9.pli pli\examples\stage9sub.pli -o stage9
+dist\stage9.exe
+```
+
+`-o name` sets the output name (default: the first source file's
+basename). The compiled program still reads real `SYSIN`/`GET` input
+normally when you actually run it (`echo 1 2 3 | dist\avg.exe`) — only
+the *build script's own* smoke test feeds it empty input, to catch
+build failures without hanging on programs that expect real data.
+
+**Build the generic, reusable interpreter instead** — `pli.exe`, run
+as `pli.exe program.pli` against *any* program afterwards (this is
+what `pip install`-free users download from the
+[Releases page](../../releases)):
+
+```
+python scripts/build.py
+```
+
+Produces a native `pli`/`pli.exe` for **whatever OS you run it on**
+(no cross-compilation — build on Windows for a Windows binary, on
+Linux for a Linux binary), packaged with the examples and docs into
+`dist/pli-<version>-<platform>-<arch>[.zip]`. `.github/workflows/
+release.yml` runs this mode on both Windows and Linux for every pushed
+`vX.Y.Z` tag and attaches both zips to the GitHub Release.
+
+Both modes: CLI only, the Tkinter IDE is not packaged this way; the
+frozen binary bundles sqlite for `EXEC SQL` but not the Db2 driver
+(`ibm_db` pulls in a native client library with its own redistribution
+terms) — Db2 support needs the source install (`pip install ibm_db`).
+
+On Linux, a `.pli` file can also be marked directly executable:
+```
+#!/usr/bin/env pli
+HELLO: PROC OPTIONS(MAIN);
+   PUT LIST('hi');
+END HELLO;
+```
+```
+chmod +x hello.pli && ./hello.pli
+```
+
 ## Layout
 
 | File | Role |
@@ -310,3 +381,6 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 | `pli_ide.py` | Tkinter IDE (edit / compile / run) |
 | `pli.bat`, `pli-ide.bat` | Windows launchers |
 | `bin/pli`, `bin/pli-ide` | Unix (Linux/macOS) launchers |
+| `scripts/build.py` | builds a standalone CLI executable (PyInstaller) |
+| `scripts/pli_cli_entry.py` | PyInstaller entry point for the CLI |
+| `.github/workflows/release.yml` | CI: builds + releases Windows/Linux binaries per tag |

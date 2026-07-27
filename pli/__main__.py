@@ -3,6 +3,7 @@
 Several files are treated as separately compiled external procedures
 linked into one program (the one with OPTIONS(MAIN) is the entry).
 """
+import os
 import sys
 
 from .interpreter import run_files, PLIError
@@ -12,7 +13,10 @@ from .lexer import LexError
 
 def main(argv):
     if len(argv) < 1:
-        print("usage: python -m pli <program.pli> [more.pli ...]",
+        prog = os.path.basename(sys.argv[0]) or "pli"
+        if prog in ("__main__.py", "-c"):
+            prog = "python -m pli"
+        print("usage: %s <program.pli> [more.pli ...]" % prog,
               file=sys.stderr)
         return 2
     try:
