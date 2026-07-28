@@ -124,8 +124,33 @@ class PLILexer:
     def t_ID(self, t):
         r"[A-Za-z_$\#@][A-Za-z0-9_$\#@]*"
         t.value = t.value.upper()
-        t.type = reserved.get(t.value, "ID")
+        if t.value == "STRING" and not self._peek_lparen(t.lexer):
+            # STRING is only ever a keyword as PUT STRING(...), GET
+            # STRING(...), or the STRING(...) builtin -- all three are
+            # always immediately followed by '('. Everywhere else (e.g.
+            # DECLARE STRING CHAR(*)) it must remain a plain identifier,
+            # since real PL/I has no reserved words and this one keyword
+            # is common as a parameter/variable name.
+            t.type = "ID"
+        else:
+            t.type = reserved.get(t.value, "ID")
         return t
+
+    @staticmethod
+    def _peek_lparen(lexer):
+        """True if the next significant character (skipping whitespace
+        and /* ... */ comments) after the current token is '('."""
+        data, pos, n = lexer.lexdata, lexer.lexpos, len(lexer.lexdata)
+        while pos < n:
+            c = data[pos]
+            if c in " \t\r\n\f\v":
+                pos += 1
+            elif data.startswith("/*", pos):
+                end = data.find("*/", pos + 2)
+                pos = end + 2 if end != -1 else n
+            else:
+                break
+        return pos < n and data[pos] == "("
 
     # multi-char operators (function rules keep definition order)
     def t_POW(self, t):

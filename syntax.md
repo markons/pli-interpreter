@@ -67,7 +67,13 @@ operators   ::= '**' '||' '<=' '>=' '<' '>' '=' not-sign'=' '<>'
 
 Identifiers and keywords are case-insensitive.  Unlike real PL/I, the
 statement keywords are **reserved** (`IF DO END DECLARE PUT GET ...`;
-full list = `reserved` table in `pli/lexer.py`).
+full list = `reserved` table in `pli/lexer.py`), with one deliberate
+exception: `STRING` is only tokenized as a keyword when immediately
+followed by `(` (its only three uses: `PUT STRING(`, `GET STRING(`,
+and the `STRING(...)` builtin) — everywhere else, including
+`DECLARE STRING CHAR(*)`, it is a plain identifier, since `string` is
+a common parameter name in real PL/I code (v0.9.0; see `_peek_lparen`
+in `pli/lexer.py`).
 
 ---
 

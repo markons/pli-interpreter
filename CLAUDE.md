@@ -51,6 +51,8 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   only). CHARACTER pp-values substitute as RAW text — a string constant
   value must itself contain quotes.
 - `sql.py` EXEC SQL runtime — see SQL section.
+- `javagen.py` PL/I → Java transpiler (v0.9.0, experimental) — see
+  Java transpiler section below.
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
   byte overlay; UNSPEC works per-scalar via struct (still true as of
   v0.7.0 — see below). DO REPEAT, REGIONAL(2/3), GENERIC: unsupported
@@ -145,6 +147,98 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
 - ibm_db on Windows: import may fail with "DLL load failed" — sql.py
   self-heals by os.add_dll_directory(site-packages/clidriver/bin).
   User's Db2: localhost:25000/sample, user maga1, prompts for password.
+
+## Java transpiler (pli/javagen.py, v0.9.0, experimental — separate
+## track from the roadmap's "transpile-to-Python" perf item, don't conflate)
+- Real AST→Java source codegen (not an interpreter, not a serialized-AST
+  runner) reusing pli's own lexer/parser (no separate grammar). Runtime:
+  `javart/PLI.java` (I/O incl. 24-col PUT LIST tabs, string/bit/
+  arithmetic builtins, PLIError condition class). Driver:
+  `scripts/build_java.py program.pli [-o dir] [--run] [--diff]`
+  (`--diff` also runs `python -m pli` and byte-compares stdout — the
+  actual validation method; all 6 example programs below pass this way).
+- Repr: every scalar is a 1-element Java array (long[1]/double[1]/
+  String[1]) so CALL-by-ref is plain aliasing (mirrors interpreter's
+  Variable box); PL/I arrays → plain Java arrays (already refs, no
+  double-boxing — VarInfo.jtype() always appends exactly one `[]`
+  regardless of scalar vs array, this was a real bug once: `is_array`
+  must NOT gate whether `[]` is added). Nested PL/I procs → non-static
+  Java inner classes; Java's automatic implicit-outer-instance capture
+  reproduces lexical scoping for free — recursive self-calls and
+  sibling/enclosing calls need ZERO special-casing at the call site
+  (`new X(...)` inside a method always captures the correct outer
+  instance from where the `new` textually sits). GOTO restricted to
+  labels at a procedure's OWN top level (not nested in DO/IF/SELECT):
+  compiles to a `switch(pc)` inside `while(true) dispatch: {...}`;
+  ordinary fallthrough = normal label flow, `pc=N;continue dispatch;`
+  = GOTO. Trailing `throw ... fell off end` safety net is emitted only
+  when reachable — a static `always_returns()`/`body_always_returns()`
+  check skips it for label-free bodies provably ending in RETURN/STOP
+  (needed because javac hard-errors on statically-unreachable code;
+  the dispatch-loop case always keeps it since its `break;` after the
+  switch is genuinely reachable).
+- Type system gotcha (cost real debugging time): CHAR and BIT both
+  resolve to VarInfo.kind "string", but expr()-level kind has a THIRD
+  tag "bitstring" for expression results (Ref to a BIT var, BIT literal,
+  bitAnd/Or/Not) — needed so `&`/`|`/`^`/PUT LIST route through
+  PLI.bitAnd/bitOr/bitNot/asBits instead of the boolean/CHAR paths.
+  Do NOT reintroduce the earlier `_is_bit_expr(AST node)` pattern-match
+  approach — it silently breaks on any compound expression (e.g. `^B1`
+  lost its bit-ness because UnOp isn't a bare Ref/Bits node); kind must
+  propagate through eval_UnOp/eval_BinOp/eval_Ref properly instead.
+  REPEAT(s,n) is n+1 copies, COPY(s,n) is n copies — do not merge them.
+  Procedure-call-as-expression return type comes from a pre-pass
+  (`_collect_ret_kinds`, walks all top-level + nested ProcDefs before
+  any codegen) into `self.ret_kinds`; a BIT/CHAR-returning function
+  used in `IF f(...) THEN` needs this to know to route through
+  PLI.bitTrue rather than defaulting to `!= 0` on a String.
+- Scope cuts (raise CodegenError naming construct+line, never silently
+  wrong): structures, PICTURE, ON-conditions, BASED/POINTER/
+  CONTROLLED/DEFINED/UNSPEC, record I/O, COMPLEX, exact FIXED DECIMAL
+  (literals become IEEE double — no FixedDec/BigDecimal here), SQL,
+  multitasking, multi-dim arrays, non-1 array lower bounds, aggregate
+  assignment, labels/DCLs nested inside DO/IF/SELECT/BEGIN.
+- FIXED (was open in the previous entry below): `STRING` reserved word
+  collided with `DECLARE STRING CHAR(*);` (broke the owner's real
+  match.pli, a `string`-parameter glob-matcher). Fix in lexer.py's
+  t_ID: STRING only tokenizes as STRINGKW when the next significant
+  char (skip ws + `/* */`, via new `_peek_lparen` static helper) is
+  `(` — true for all 3 real uses (PUT STRING(, GET STRING(, the
+  STRING(...) builtin), false for a bare declaration. Verified: match.pli
+  parses+runs now; stage2.pli's PUT STRING/GET STRING round-trips still
+  work (regression-checked, not just assumed). Grammar rebuild clean.
+  General pattern for any FUTURE keyword/identifier collision like this.
+- pli/examples/match_demo.pli (added for backend validation) is a
+  self-contained 3-external-procedure copy of the owner's match.pli
+  (MAIN driver + recursive `match` + sibling `char_in_class`), with
+  the colliding parameter renamed `string`→`txt` (predates the STRING
+  fix above; could use the real name now, left as-is, harmless).
+- The owner's actual `C:\Users\maga1\Documents\code\match.pli` (OUTSIDE
+  this repo — the "stale pre-repo copy" note at the top is about
+  `.../code/pli/`, unrelated) now has, in the same file: a `char_in_class`
+  external proc + a `MATCHTEST: PROC OPTIONS(MAIN);` driver with 8 test
+  cases, appended after `end match;`. Running it (after the STRING fix)
+  surfaced TWO real, pre-existing bugs in the owner's own MATCH
+  algorithm (not bugs in either back end — diagnosed, not fixed, it's
+  the owner's call):
+  1. `declare class char(256);` (no VARYING) — same truncation-to-256
+     issue as match_demo.pli above: character-class `[XYZ]` matching
+     always fails. Fix would be adding VARYING.
+  2. Unclosed-bracket case (`'A[BC'`, no closing `]`) raises an
+     UNHANDLED StringRange condition instead of the documented
+     "unclosed '[' makes the match fail" (return '0'B) — root cause:
+     the loop guard `k <= length(pattern) & substr(pattern,k,1) ^= ']'`
+     assumes `&` short-circuits. Real PL/I(F) does NOT guarantee
+     short-circuit evaluation of `&`/`|` (well-known F-level trivia),
+     and this interpreter evaluates both operands — matching historical
+     PL/I(F) behavior, not a bug here. Once k runs past length(pattern),
+     the right operand's SUBSTR goes out of range. A fix would need an
+     explicit nested IF to short-circuit manually, not just `&`.
+  3 of 8 driver cases pass as expected; the crash on case 6 means cases
+  7-8 never execute (no ON CONDITION established — expected default
+  PL/I behavior, program aborts on the unhandled condition).
+- Owner manually compiled/ran a build (Strings.java + PLI.java) before
+  approving; committed/pushed/tagged as v0.9.0.
 
 ## IDE (pli_ide.py, Tk, stdlib)
 - Worker-thread run; GUI↔worker via out_queue tuples (kind first:

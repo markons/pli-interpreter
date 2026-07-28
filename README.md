@@ -275,6 +275,61 @@ plus pseudo-variables `SUBSTR` and `UNSPEC`.
 - ON-unit resumption is at statement granularity; PUT LIST tab stops
   are fixed at 24 columns.
 
+## Java transpiler (experimental)
+
+```
+python scripts/build_java.py program.pli [-o outdir] [--run] [--diff]
+```
+
+Translates a structured PL/I subset into real, standalone Java source
+(`pli/javagen.py`, runtime `javart/PLI.java`) — not an interpreter or
+a serialized AST, an actual `.java` file you can `javac`/`java` with no
+Python involved at run time. `--run` compiles and executes it; `--diff`
+also runs `python -m pli` on the same program and diffs stdout, which
+is how the backend is validated (`pli/examples/hello.pli`,
+`fibfact.pli` (recursion + nested-procedure closures), `sort.pli`
+(arrays, by-reference CALL, the GOTO dispatch loop below), `strings.pli`
+(bit-string logic, SUBSTR pseudo-variable), `average.pli` (GET LIST),
+and `match_demo.pli` (multiple top-level external procedures, one a
+self-recursive `CHAR(*)`-parameter function) all match byte-for-byte).
+
+Design: every PL/I scalar is generated as a 1-element Java array
+(`long[1]`/`double[1]`/`String[1]`) so CALL-by-reference is just array
+aliasing — the same trick the interpreter's `Variable` box uses. PL/I
+arrays map straight to Java arrays. Nested PL/I procedures become
+non-static Java inner classes, relying on Java's automatic
+implicit-outer-instance capture to reproduce PL/I's lexical scoping —
+this means recursive self-calls and calls to sibling/enclosing
+procedures need zero special-casing at the call site, Java's own
+scoping rules do the work. `GOTO` (restricted to labels at a
+procedure's own top level — see below) compiles via the classic
+goto-elimination technique: the label set becomes `case N:` blocks in
+a `switch` inside a `while(true)` dispatch loop, with a normal label
+just falling through to the next case and a `GOTO` becoming
+`pc = N; continue dispatch;`.
+
+Scope: procedures (external, nested, recursive), FIXED BINARY (→ Java
+`long`) / FLOAT (→ `double`) / CHAR / BIT scalars, 1-based 1-D arrays,
+`IF`/`DO`(`WHILE`|`UNTIL`|iterative)/`SELECT`, `LEAVE`/`ITERATE` (→
+labeled `break`/`continue`), `CALL`/`RETURN`, `PUT LIST`/`EDIT`(`A`,
+`F`, `X`)/`SKIP`, `GET LIST`, and the string/bit/arithmetic builtins
+(`SUBSTR LENGTH INDEX TRIM UPPERCASE LOWERCASE TRANSLATE VERIFY REPEAT
+COPY ABS MOD MIN MAX SQRT TRUNC CEIL FLOOR ROUND HBOUND LBOUND`). The
+`%` preprocessor runs for free (it's already a text-in/text-out pass
+before parsing).
+
+**Not implemented** (raises a clear `CodegenError` naming the
+construct and line, rather than silently mistranslating): structures,
+PICTURE, ON-conditions, BASED/POINTER/CONTROLLED/DEFINED/UNSPEC,
+record I/O, COMPLEX, exact FIXED DECIMAL (decimal literals are
+approximated as IEEE double — no `FixedDec`/`BigDecimal` in this
+backend), multitasking, multi-dimensional arrays, non-1 array lower
+bounds, aggregate (whole-array/structure) assignment, and labels or
+DECLAREs nested inside a DO/IF/SELECT/BEGIN body (only labels at a
+procedure's own top level are reachable by GOTO). `PUT DATA`/`GET
+DATA`/`STRING`/`FORMAT`, file I/O, and SQL are not ported to this
+backend (all of those already work in the Python interpreter).
+
 ## Building standalone executables
 
 ```
@@ -352,8 +407,11 @@ chmod +x hello.pli && ./hello.pli
 | `pli/fixeddec.py` | exact FIXED DECIMAL(p,q) arithmetic |
 | `pli/preproc.py` | compile-time preprocessor |
 | `pli/sql.py` | EXEC SQL runtime (connections, cursors, WHENEVER) |
+| `pli/javagen.py` | experimental PL/I → Java transpiler (AST → Java source) |
 | `pli/__main__.py` | CLI entry point (`python -m pli`) |
 | `pli/examples/` | demo programs |
+| `javart/PLI.java` | runtime library for transpiled Java (I/O, builtins, conditions) |
+| `scripts/build_java.py` | drives the Java transpiler: parse → codegen → javac [→ run/diff] |
 | `pli_ide.py` | Tkinter IDE (edit / compile / run) |
 | `pli.bat`, `pli-ide.bat` | Windows launchers |
 | `bin/pli`, `bin/pli-ide` | Unix (Linux/macOS) launchers |
