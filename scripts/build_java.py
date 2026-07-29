@@ -118,7 +118,11 @@ def main(argv):
         p_out, p_err, p_rc = python_run(args.pli_file, args.stdin)
         print("--- python stdout ---")
         print(p_out, end="")
-        if p_out == j_out:
+        # Python's stdout is opened in text mode, which on Windows
+        # translates \n -> \r\n; Java's PrintStream never does. That's a
+        # platform text-mode artifact, not a behavioral difference, so
+        # normalize both sides before comparing.
+        if j_out.replace("\r\n", "\n") == p_out.replace("\r\n", "\n"):
             print("*** MATCH: java and python -m pli produced identical "
                  "stdout ***")
         else:

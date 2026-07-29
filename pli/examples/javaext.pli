@@ -1,0 +1,90 @@
+/* Exercises the Java-backend "easy tier" additions: multi-dimensional
+   arrays (+ non-1 bounds + aggregate assignment), COMPLEX, multitasking
+   (EVENT/WAIT/COMPLETION/STATUS), and PUT/GET DATA, PUT/GET STRING,
+   FORMAT + R(). No BEGIN blocks (not supported by the Java backend). */
+JAVAEXT: PROC OPTIONS(MAIN);
+   DCL M(3,3) FIXED;
+   DCL N(3,3) FIXED;
+   DCL ROW FIXED BIN(31);
+   DCL COL FIXED BIN(31);
+   DCL T(0:2, 1:3) FIXED INIT(1,2,3, 4,5,6, 7,8,9);
+   DCL A(5) FIXED;
+   DCL B(5) FIXED;
+   DCL Z COMPLEX;
+   DCL W COMPLEX;
+   DCL E1 EVENT;
+   DCL E2 EVENT;
+   DCL RESULTS(2) FIXED;
+   DCL LINE CHAR(40) VARYING;
+   DCL X FIXED;
+   DCL Y FIXED;
+
+   /* ---- multi-dimensional arrays, non-1 bounds ---- */
+   DO ROW = 1 TO 3;
+      DO COL = 1 TO 3;
+         M(ROW, COL) = ROW * 10 + COL;
+      END;
+   END;
+   PUT LIST('M(2,3) =', M(2,3), '  HBOUND(M,1)=', HBOUND(M,1),
+           '  HBOUND(M,2)=', HBOUND(M,2));
+
+   PUT SKIP LIST('T(0,1)=', T(0,1), ' T(2,3)=', T(2,3),
+                '  LBOUND(T,1)=', LBOUND(T,1));
+
+   /* aggregate array assignment */
+   N = M;                       /* whole-array copy   */
+   PUT SKIP LIST('N(2,3) after N=M:', N(2,3));
+   A = 0;                       /* scalar broadcast    */
+   PUT SKIP LIST('A(3) after A=0:', A(3));
+   B = A;
+   PUT SKIP LIST('B(1) after B=A:', B(1));
+
+   /* ---- COMPLEX ---- */
+   Z = 3 + 4I;
+   W = 1 - 2I;
+   PUT SKIP(2) LIST('Z =', Z, '  W =', W);
+   PUT SKIP LIST('Z+W =', Z + W, '  Z*W =', Z * W);
+   PUT SKIP LIST('ABS(Z) =', ABS(Z), '  CONJG(Z) =', CONJG(Z));
+   PUT SKIP LIST('REAL(Z) =', REAL(Z), '  IMAG(Z) =', IMAG(Z));
+   PUT SKIP LIST('Z = W ?', Z = W, '  Z ^= W ?', Z ^= W);
+
+   /* ---- multitasking: EVENT/WAIT/COMPLETION/STATUS ---- */
+   CALL SUMTO(300, 1) EVENT(E1);
+   CALL SUMTO(500, 2) EVENT(E2);
+   PUT SKIP(2) LIST('tasks launched');
+   WAIT(E1, E2);
+   PUT SKIP LIST('both complete, RESULTS(1)=', RESULTS(1),
+                ' RESULTS(2)=', RESULTS(2));
+   PUT SKIP LIST('completion(E1)=', COMPLETION(E1),
+                ' status(E1)=', STATUS(E1));
+
+   /* ---- PUT DATA / GET DATA ---- */
+   PUT SKIP(2) DATA(ROW, COL, M(2, 3));
+   GET DATA(ROW, COL);
+   PUT SKIP LIST('after GET DATA: ROW=', ROW, ' COL=', COL);
+
+   /* ---- PUT STRING / GET STRING ---- */
+   PUT STRING(LINE) LIST('sum=', ROW + COL);
+   PUT SKIP(2) LIST('assembled: [', LINE, ']');
+   GET STRING('11 22') LIST(X, Y);
+   PUT SKIP LIST('from string: X=', X, ' Y=', Y);
+
+   /* ---- FORMAT statement + R() remote format ---- */
+   PUT SKIP(2) EDIT('A', 1, 'B', 2) (R(TWOCOL));
+   PUT SKIP EDIT(7, 8, 9) ((3) F(4));
+   STOP;
+
+SUMTO: PROC(LIMIT, SLOT);
+   DCL LIMIT FIXED;
+   DCL SLOT FIXED;
+   DCL K FIXED;
+   DCL S FIXED;
+   S = 0;
+   DO K = 1 TO LIMIT;
+      S = S + K;
+   END;
+   RESULTS(SLOT) = S;
+END SUMTO;
+
+TWOCOL: FORMAT(A(2), F(4), X(2), A(2), F(4));
+END JAVAEXT;

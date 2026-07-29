@@ -148,15 +148,17 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   self-heals by os.add_dll_directory(site-packages/clidriver/bin).
   User's Db2: localhost:25000/sample, user maga1, prompts for password.
 
-## Java transpiler (pli/javagen.py, v0.9.0, experimental — separate
+## Java transpiler (pli/javagen.py, v0.10.0, experimental — separate
 ## track from the roadmap's "transpile-to-Python" perf item, don't conflate)
 - Real AST→Java source codegen (not an interpreter, not a serialized-AST
   runner) reusing pli's own lexer/parser (no separate grammar). Runtime:
   `javart/PLI.java` (I/O incl. 24-col PUT LIST tabs, string/bit/
-  arithmetic builtins, PLIError condition class). Driver:
-  `scripts/build_java.py program.pli [-o dir] [--run] [--diff]`
-  (`--diff` also runs `python -m pli` and byte-compares stdout — the
-  actual validation method; all 6 example programs below pass this way).
+  arithmetic/complex builtins, Event/threading, PLIError condition class).
+  Driver: `scripts/build_java.py program.pli [-o dir] [--run] [--diff]`
+  (`--diff` also runs `python -m pli` and byte-compares stdout, with
+  \r\n normalized out first — Python's stdout is CRLF on Windows, Java's
+  PrintStream never is, a platform artifact not a behavior diff — the
+  actual validation method; all 7 example programs below pass this way).
 - Repr: every scalar is a 1-element Java array (long[1]/double[1]/
   String[1]) so CALL-by-ref is plain aliasing (mirrors interpreter's
   Variable box); PL/I arrays → plain Java arrays (already refs, no
@@ -194,10 +196,12 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   PLI.bitTrue rather than defaulting to `!= 0` on a String.
 - Scope cuts (raise CodegenError naming construct+line, never silently
   wrong): structures, PICTURE, ON-conditions, BASED/POINTER/
-  CONTROLLED/DEFINED/UNSPEC, record I/O, COMPLEX, exact FIXED DECIMAL
-  (literals become IEEE double — no FixedDec/BigDecimal here), SQL,
-  multitasking, multi-dim arrays, non-1 array lower bounds, aggregate
-  assignment, labels/DCLs nested inside DO/IF/SELECT/BEGIN.
+  CONTROLLED/DEFINED/UNSPEC, record I/O, exact FIXED DECIMAL (literals
+  become IEEE double — no FixedDec/BigDecimal here), SQL, BEGIN blocks,
+  GET EDIT, labels/DCLs nested inside DO/IF/SELECT/BEGIN, assumed-size
+  `(*)` within a multi-dim array (only a whole 1-D `(*)` param), array
+  elements in a GET DATA list (PUT DATA supports them; GET DATA is
+  scalars-by-name only).
 - FIXED (was open in the previous entry below): `STRING` reserved word
   collided with `DECLARE STRING CHAR(*);` (broke the owner's real
   match.pli, a `string`-parameter glob-matcher). Fix in lexer.py's
@@ -239,6 +243,108 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   PL/I behavior, program aborts on the unhandled condition).
 - Owner manually compiled/ran a build (Strings.java + PLI.java) before
   approving; committed/pushed/tagged as v0.9.0.
+- v0.10.0 additions ("easy tier" from the owner's own capability
+  assessment; owner explicitly said proceed without asking permission
+  again this round):
+  1. Multi-dim arrays + non-1 lower bounds + aggregate assignment.
+     VarInfo gained `dims` ([(lo,hi),...] ints, None = scalar or the
+     pre-existing 1-D assumed-size (*) param case, unchanged). One flat
+     Java array backs any dimensionality (row-major, matches
+     PLIArray._offset in interpreter.py EXACTLY: off=off*extent+idx per
+     dimension in order — verified by reading that method, not
+     guessed). New `_subscript_index()`/`PLI.idx(i,lo,hi)`/
+     `PLI.idx1(i,len)` replace the old unchecked `sub-1`; SUBSCRIPTRANGE
+     now a real thrown condition instead of a raw Java
+     ArrayIndexOutOfBounds. Aggregate assignment (`_gen_aggregate_assign`)
+     evaluates the RHS exactly ONCE into a temp before the fill loop —
+     critical: naively re-embedding the RHS Java text inside the loop
+     body would re-execute a side-effecting RHS (e.g. a function call)
+     N times instead of once. HBOUND/LBOUND/DIM take the optional
+     dimension-number 2nd arg now.
+  2. COMPLEX. PLI.Complex (re,im doubles) + cAdd/cSub/cMul/cDiv/cNeg/
+     cAbs/cConjg; "complex" is a 4th expr()-kind (long/double/string/
+     bitstring were the others) with auto-promotion in
+     `_complex_binop`/`_compare` (bare long/double operand → PLI.C(x)).
+     REAL/IMAG/CONJG/COMPLEX/ABS(complex) special-cased in
+     `_builtin_or_call` BEFORE the generic _BUILTIN_MAP lookup (ABS
+     needs to return "double" for a complex arg, not the generic
+     same-kind-as-arg rule). Imaginary literals (already lexed as
+     Python `complex` by lexer.py's `nI` suffix) handled in eval_Num.
+  3. Multitasking. PLI.Event (CountDownLatch-backed) + spawnTask (runs
+     a Runnable lambda on a Thread, sets ev.status=1 on exception) +
+     wait(events[], n) (polling loop, 5ms sleep) + completion/status.
+     `CALL p(...) EVENT(e)` → `e[0]=new PLI.Event(); PLI.spawnTask(e[0],
+     () -> { new P(...).invoke(...); });` — the lambda body's `new P()`
+     still correctly captures the enclosing instance via Java's normal
+     rules (lambdas are transparent to `this`/outer-instance capture,
+     unlike anonymous classes), so a worker task nested inside the
+     caller can freely mutate the caller's fields, exactly like
+     stage5.pli's WORKER→TOTAL pattern. KNOWN, ACCEPTED hazard: two
+     tasks both mutating the same shared field with no synchronization
+     is a genuine data race with REAL OS threads (worse than the Python
+     backend's GIL-cushioned version) — this is faithful to actual
+     PL/I multitasking risk, not a new deviation, so NOT synchronized
+     on purpose; javaext.pli's test deliberately has each task write to
+     its own RESULTS(slot) to keep --diff deterministic rather than
+     relying on interleaving-sensitive shared-accumulator output.
+  4. PUT/GET DATA, PUT/GET STRING, FORMAT + R() + (n)FMT repetition.
+     PUT DATA supports scalars AND array elements (dynamic subscript
+     baked into a Java string-concat expression for the "NAME(i)="
+     label); GET DATA is scalars-only, via PLI.getDataMap() (reads to
+     `;`, regex NAME=value pairs into a Map, order-independent — NOT
+     positional). PUT/GET STRING via a capture-stack in PLI.java
+     (beginStringCapture/endStringCapture push/pop a StringBuilder +
+     its own column counter so PUT LIST tab math stays correct inside
+     a capture; pushStringInput/popStringInput do the same for GET
+     STRING's token source). FORMAT statements collected per-procedure
+     into `Ctx.format_defs` (NOT chained to the parent — a FORMAT label
+     is only visible in its own procedure, matching GOTO's top-label
+     restriction); `_expand_formats()` inlines R(label) and unrolls
+     (n)FMT groups (constant n only) before codegen, mirroring the
+     interpreter's own `_expand_formats`.
+  5. Real bugs found and fixed while building the above (all verified
+     via --diff, not assumed):
+     - Ctx/scope chaining was MISSING entirely before this round: a
+       nested procedure's `self.ctx.syms` only ever held ITS OWN
+       params/locals, so referencing an enclosing procedure's variable
+       (e.g. SUMTO writing to JAVAEXT's RESULTS array) raised "not
+       declared". Fixed by making Ctx parent-chained (`Ctx.lookup`
+       walks up) AND, just as importantly, restructuring
+       gen_proc_class so a procedure's OWN Ctx is created and set as
+       `self.ctx` BEFORE its nested procedures are generated (it used
+       to be created only much later, around the invoke() body, so
+       nested classes were generated against the WRONG (grandparent or
+       None) ctx). top_labels and format_defs stay per-procedure,
+       unchained on purpose (real PL/I GOTO/FORMAT-label scoping).
+     - `_gen_put_edit` treated every format item as consuming one data
+       item in lockstep — wrong the moment a control item (X/COL/SKIP)
+       appears in the list, since those must NOT consume a data item.
+       Only surfaced once R()/FORMAT was added (no prior test had X()
+       interleaved between data formats). Fixed to mirror the
+       interpreter's exact algorithm: an inner while-loop consumes
+       leading control formats before each data item. COL was ALSO
+       added for real (PLI.editCol) rather than left unsupported,
+       since the fix made it nearly free.
+     - `_gen_store`/`_gen_aggregate_assign` discarded the RHS's
+       expr()-kind and never converted a Java `boolean` (from a
+       comparison, or now COMPLETION()) into a BIT/CHAR string — so
+       `FLAG = (X > 5);` was ALREADY silently broken before this round
+       (pre-existing, not something this round introduced) and
+       COMPLETION() would have hit the identical gap. Fixed via
+       PLI.b(boolean)->String + `_bool_to_string()`, threaded through
+       both call sites.
+     - `STOP` → `System.exit(0)` bypasses main()'s try/finally, so the
+       final `PLI.flushLine()` never ran — trailing newline silently
+       dropped whenever a program's last statement was STOP. Fixed by
+       flushing explicitly right before the exit() call in gen_Stop.
+  6. pli/examples/javaext.pli added (all 6 features in one program,
+     avoids BEGIN blocks — not supported — declares/nested SUMTO proc
+     directly in JAVAEXT's body instead, same shape as stage5.pli).
+  7. NOT committed/pushed yet — awaiting owner test/approval per the
+     standing convention above (this round moved faster since the
+     owner pre-authorized "don't ask permission again", but that was
+     about tool-call confirmations, not the separate commit-approval
+     gate, which still stands).
 
 ## IDE (pli_ide.py, Tk, stdlib)
 - Worker-thread run; GUI↔worker via out_queue tuples (kind first:
