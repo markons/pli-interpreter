@@ -738,6 +738,8 @@ class Interpreter:
         self.page_size = 60      # SYSPRINT PAGESIZE
         self.line_no = 1         # current line on the page (LINENO)
         self.last_count = 0      # items moved by last GET/PUT (COUNT)
+        self.dlirt = None        # lazy DLIBridge (CALL PLITDLI support)
+        self.dli_status = ""     # status of the last CALL PLITDLI
 
     def password_prompt(self, prompt):
         """Ask the user for a database password; the IDE overrides this."""
@@ -1650,6 +1652,8 @@ class Interpreter:
         self.assign_target(target, new, env)
 
     def exec_CallStmt(self, stmt, env):
+        if stmt.name == "PLITDLI":
+            return self._exec_plitdli(stmt, env)
         entry = self._resolve_entry(env.lookup(stmt.name), stmt.name,
                                     stmt.lineno)
         if not isinstance(entry, Procedure):
@@ -1700,6 +1704,34 @@ class Interpreter:
             from .sql import SqlRuntime
             self.sqlrt = SqlRuntime(self)
         self.sqlrt.exec_sql(stmt.text, env, stmt)
+
+    def _exec_plitdli(self, stmt, env):
+        """CALL PLITDLI(count, call-code, pcb-ptr, io-area [, ssa...]).
+
+        `count` and `pcb-ptr` are accepted for source compatibility but
+        ignored: this interpreter talks to exactly one database / PCB."""
+        if self.dlirt is None:
+            from .dli_preproc import DLIBridge, IRISDLI, connect
+            _conn, db = connect()
+            global_name = os.environ.get("PLI_DLI_GLOBAL", "^CUSTOMER")
+            self.dlirt = DLIBridge(IRISDLI(db, global_name))
+        cells = [self._arg_cell(a, env) for a in stmt.args]
+        if len(cells) < 4:
+            raise PLIError(
+                "line %d: CALL PLITDLI needs at least 4 arguments "
+                "(count, call-code, pcb, I/O area)" % stmt.lineno)
+        call_code = to_string(cells[1].value).strip()
+        io_cell = cells[3]
+        ssas = [to_string(c.value) for c in cells[4:]]
+        from .dli_preproc import DLIError
+        try:
+            status, value = self.dlirt.execute(
+                call_code, to_string(io_cell.value), ssas)
+        except DLIError as e:
+            raise PLIError("line %d: %s" % (stmt.lineno, e))
+        self.dli_status = status
+        if value is not None:
+            io_cell.value = convert(value, io_cell.decl)
 
     def exec_WaitStmt(self, stmt, env):
         events = []
@@ -3224,7 +3256,8 @@ class Interpreter:
 
 _NILADIC_BUILTINS = {"DATE", "TIME", "DATETIME", "ONCODE", "ONCHAR",
                      "ONSOURCE", "ONLOC", "ONFILE", "ONKEY",
-                     "NULL", "EMPTY", "RANDOM", "LINENO", "COUNT"}
+                     "NULL", "EMPTY", "RANDOM", "LINENO", "COUNT",
+                     "DLISTATUS"}
 _UNEVALUATED_BUILTINS = {"HBOUND", "LBOUND", "DIM", "ADDR", "ALLOCATION",
                          "LINENO", "COUNT"}
 
@@ -3242,7 +3275,7 @@ _BUILTINS = {
     "VERIFYR", "TALLY", "HIGH", "LOW", "BOOL", "STRING",
     "SINH", "COSH", "TANH", "ATANH", "ERF", "ERFC", "ATAND",
     "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE",
-    "SUM", "PROD", "DATETIME", "RANDOM", "LINENO", "COUNT",
+    "SUM", "PROD", "DATETIME", "RANDOM", "LINENO", "COUNT", "DLISTATUS",
 }
 
 
@@ -3546,6 +3579,8 @@ def builtin_dispatch(interp, name, args, node, env):
     if name == "ONKEY":
         c = interp.current_cond
         return (c.source or "") if c and c.name == "KEY" else ""
+    if name == "DLISTATUS":
+        return interp.dli_status
     if name == "DATE":
         return time.strftime("%y%m%d")
     if name == "TIME":

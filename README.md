@@ -5,19 +5,42 @@ F-compiler language level, using [PLY](https://www.dabeaz.com/ply/)
 (`ply.lex` / `ply.yacc`) for the lexer and LALR(1) grammar — plus a small
 stand-alone Tkinter IDE.
 
-## Requirements
+## Install
 
-Python 3.10+ and:
+Two ways to get running — pick one.
+
+**A. Prebuilt executable (no Python needed).** Download a
+self-contained CLI executable from the [Releases page](../../releases)
+(Windows and Linux, x64):
 
 ```
-pip install -r requirements.txt      # just ply
+pli.exe program.pli        # Windows
+./pli program.pli          # Linux
 ```
 
-Or skip Python entirely: download a self-contained CLI executable
-from the [Releases page](../../releases) (Windows and Linux, x64) —
-no interpreter, no `pip install`, just `pli program.pli`. Runs the
-sqlite `EXEC SQL` backend out of the box; Db2 (`ibm_db`) support needs
-the source install (see *Building standalone executables* below).
+Runs the sqlite `EXEC SQL` backend out of the box. `ibm_db` (Db2) and
+DL/I (`CALL PLITDLI`, needs the IRIS driver) are **not** bundled — use
+the source install below for those.
+
+**B. From source.** Requires Python 3.10+:
+
+```
+git clone https://github.com/markons/pli-interpreter.git
+cd pli-interpreter
+pip install -r requirements.txt      # installs ply
+```
+
+That's the whole interpreter. Everything else is opt-in, only needed
+if you actually use the corresponding feature:
+
+| Feature | Install |
+|---|---|
+| Db2 `EXEC SQL` | `pip install ibm_db` |
+| DL/I `CALL PLITDLI` | `pip install intersystems-irispython` |
+| Building standalone executables | `pip install pyinstaller` |
+
+sqlite `EXEC SQL` needs nothing extra (stdlib). See `requirements.txt`
+for the same list as commented-out lines.
 
 ## Usage
 
@@ -41,6 +64,13 @@ bin/pli myprog.pli
 bin/pli-ide myprog.pli
 ```
 
+Several files as one separately-compiled program (external procedures,
+`STATIC EXTERNAL` shared data):
+
+```
+python -m pli main.pli sub1.pli sub2.pli
+```
+
 Programmatic API:
 
 ```python
@@ -48,8 +78,10 @@ from pli import run_source, run_file
 run_source("H: PROC OPTIONS(MAIN); PUT LIST('HI'); END H;")
 ```
 
-Example programs live in `pli/examples/` — `stage1.pli` … `stage5.pli`
-exercise the F-level features; the rest are basics.
+Example programs live in `pli/examples/` — `stage1.pli` … `stage10.pli`
+exercise the F-level-and-beyond features; the rest are basics. Try
+`hello.pli` first, then `fibfact.pli` (recursion) or `sort.pli`
+(arrays, by-reference CALL).
 
 ## The IDE
 
@@ -194,6 +226,63 @@ values in program text.
 **Multitasking** — `CALL p(...) EVENT(E)` runs the procedure on a
 thread; `WAIT(E1, E2 [, ...]) [(n)]`, `COMPLETION()`, `STATUS()`.
 
+## DL/I
+
+`CALL PLITDLI(count, call-code, pcb-ptr, io-area [, ssa...])` is
+intercepted at the call site — no `PLITDLI` procedure needs to exist —
+and executed against a single IRIS Global (default `^CUSTOMER`) acting
+as a simplified hierarchical database. See `pli/examples/dli.pli`.
+
+```
+DCL PLITDLI ENTRY EXTERNAL;
+CALL PLITDLI(count, call-code, pcb-ptr, io-area [, ssa-1 [, ssa-2 ...]]);
+```
+
+- `count` and `pcb-ptr` are accepted for source compatibility but
+  ignored: this interpreter talks to exactly one database / one PCB.
+- `io-area` receives the segment value on a successful `GU`/`GN`/`GNP`/
+  `GHU`/`GHN`/`GHNP`, and supplies it on `ISRT`/`REPL`.
+- Each SSA is a `CHARACTER` value: a bare segment name (`'CUSTOMER'`) is
+  used as-is; a qualified SSA (`'CUSTOMER(CUSTNO=1001)'`) contributes
+  the value side of its relational qualification as the subscript (the
+  field name is documentation only — the Global is positional, not
+  field-addressed).
+- The status of the last call is read with the `DLISTATUS` builtin
+  (`OK`, `GE`, `GB`, `GP`, `II`, `NOTHELD`, `NOLOCK`) since there is no
+  PCB structure to inspect.
+
+| Call | Meaning | Notes |
+|------|---------|-------|
+| GU   | Get Unique | positions by an explicit SSA path |
+| GN   | Get Next | depth-first walk from the current position (or from the top if none) |
+| GNP  | Get Next within Parent | first child of an explicit parent, or next sibling of the current position |
+| GHU  | Get Hold Unique | like GU, plus takes a lock for a later DLET/REPL |
+| GHN  | Get Hold Next | like GN, plus takes a lock |
+| GHNP | Get Hold Next within Parent | like GNP, plus takes a lock |
+| ISRT | Insert | fails with status II if the segment already exists |
+| DLET | Delete | requires a prior GHU/GHN/GHNP on that segment |
+| REPL | Replace | requires a prior GHU/GHN/GHNP on that segment |
+
+Not implemented: multiple PCBs/databases, checkpoint/restart (`CHKP`/
+`XRST`), rollback (`ROLB`/`ROLL`), and compound/Boolean SSA
+qualification (each SSA carries at most one relational qualifier).
+
+Configured via environment variables — all optional, with credentials
+falling back to an interactive prompt:
+
+| Variable | Default |
+|---|---|
+| `PLI_DLI_HOST` | `localhost` |
+| `PLI_DLI_PORT` | `1972` |
+| `PLI_DLI_NAMESPACE` | `SAMPLES` |
+| `PLI_DLI_USERNAME` | *(prompted)* |
+| `PLI_DLI_PASSWORD` | *(prompted)* |
+| `PLI_DLI_GLOBAL` | `^CUSTOMER` |
+
+Requires `intersystems-irispython` (see *Install* above), imported
+lazily on the first `CALL PLITDLI` — no dependency for programs that
+don't use it.
+
 ## Embedded SQL
 
 `EXEC SQL ... ;` in the style of IBM's PL/I precompiler.  The SQL text
@@ -293,9 +382,14 @@ hello.pli`, `fibfact.pli` (recursion + nested-procedure closures),
 `sort.pli` (arrays, by-reference CALL, the GOTO dispatch loop below),
 `strings.pli` (bit-string logic, SUBSTR pseudo-variable), `average.pli`
 (GET LIST), `match_demo.pli` (multiple top-level external procedures,
-one a self-recursive `CHAR(*)`-parameter function), and `javaext.pli`
+one a self-recursive `CHAR(*)`-parameter function), `javaext.pli`
 (multi-dimensional arrays, COMPLEX, multitasking, PUT/GET DATA/STRING,
-FORMAT + R()) all match byte-for-byte).
+FORMAT + R()), `structest.pli`/`structest2.pli` (nested structures,
+LIKE, qualified/unqualified/partially-qualified member access,
+structure assignment, structure and structure-member CALL parameters),
+and `recio.pli` (CONSECUTIVE + INDEXED record I/O) all match
+byte-for-byte; `javaext.pli` needs `--stdin "ROW=5 COL=5;"` since it
+exercises `GET DATA`).
 
 Design: every PL/I scalar is generated as a 1-element Java array
 (`long[1]`/`double[1]`/`String[1]`/`PLI.Complex[1]`/`PLI.Event[1]`) so
@@ -342,18 +436,50 @@ STATUS`, `HBOUND`/`LBOUND`/`DIM` all take the optional dimension-number
 argument). The `%` preprocessor runs for free (it's already a
 text-in/text-out pass before parsing).
 
+Structures: `DCL 1 X, 2 ...;`, `LIKE`, nested structures, qualified
+(`EMP.NAME.FIRST`), partially-qualified (`EMP.LAST`), and unqualified
+(`SALARY`, if unique in scope) member access, structure assignment
+(leaf-by-leaf, matching shape required; scalar broadcast requires
+every leaf to share one Java type), structure and structure-member
+CALL arguments (by reference), and `PUT LIST`/`PUT DATA` flattening a
+whole structure to its leaves. Every distinct *shape* — not
+declaration site — gets one generated Java class, so a structure
+parameter re-declared in a callee shares the caller's class instead of
+an incompatible new one. **Not yet supported**: arrays of structures,
+`BASED`/`CONTROLLED` structures, `REFER`, structure aggregate
+expressions (`S3 = S1 + S2;`), `BY NAME` assignment, and whole-array
+or whole-structure references in a `GET DATA` list (scalars only
+there).
+
+Record I/O: `DCL f FILE RECORD [KEYED] [ENV(INDEXED)];`, `OPEN`
+(`INPUT`/`OUTPUT`/`UPDATE`, `TITLE(...)`), `CLOSE`, `READ INTO(...)`
+(`KEY(...)` for a keyed lookup, bare for sequential with optional
+`KEYTO(...)`), `WRITE FROM(...)` (`KEYFROM(...)` on an INDEXED file),
+`REWRITE FROM(...) KEY(...)`, `DELETE KEY(...)` — CONSECUTIVE files are
+one record per line; INDEXED files are an in-memory sorted string-keyed
+map persisted as `key\trecord` lines on `CLOSE`. Fixed-width field
+encoding matches the interpreter's `_leaf_width`/`_record_from`/
+`_record_into` exactly (FIXED right-justified width 12, CHAR/BIT
+left-justified to their declared length or a 24/8-char default,
+FLOAT right-justified width 24). **Not supported**: `LOCATE` mode,
+`EXCLUSIVE` files, `ENV(REGIONAL(...))`, `EVENT(...)` on record I/O,
+`UNLOCK`, `SET(...)` (BASED-variable READ) — all raise a clear
+`CodegenError` naming the construct.
+
 **Not implemented** (raises a clear `CodegenError` naming the
-construct and line, rather than silently mistranslating): structures,
-PICTURE, ON-conditions, BASED/POINTER/CONTROLLED/DEFINED/UNSPEC,
-record I/O, exact FIXED DECIMAL (decimal literals are approximated as
-IEEE double — no `FixedDec`/`BigDecimal` in this backend), `BEGIN`
-blocks, `GET EDIT`, assumed-size `(*)` bounds within a multi-dimensional
+construct and line, rather than silently mistranslating): PICTURE,
+ON-conditions (so record I/O's `ENDFILE`/`KEY` conditions terminate the
+program rather than being trappable — bound loops by a known record
+count instead, as `recio.pli` does), BASED/POINTER/CONTROLLED/DEFINED/
+UNSPEC, exact FIXED DECIMAL (decimal literals are approximated as IEEE
+double — no `FixedDec`/`BigDecimal` in this backend), `BEGIN` blocks,
+`GET EDIT`, assumed-size `(*)` bounds within a multi-dimensional
 array (only a whole 1-D assumed-size parameter, as before), array
 elements in a `PUT`/`GET DATA` list on the GET side (PUT DATA supports
 them; GET DATA is scalars only), and labels or DECLAREs nested inside a
 DO/IF/SELECT/BEGIN body (only labels at a procedure's own top level are
-reachable by GOTO). File I/O and SQL are not ported to this backend
-(both already work in the Python interpreter).
+reachable by GOTO). SQL is not ported to this backend (already works
+in the Python interpreter).
 
 ## Building standalone executables
 
@@ -432,6 +558,7 @@ chmod +x hello.pli && ./hello.pli
 | `pli/fixeddec.py` | exact FIXED DECIMAL(p,q) arithmetic |
 | `pli/preproc.py` | compile-time preprocessor |
 | `pli/sql.py` | EXEC SQL runtime (connections, cursors, WHENEVER) |
+| `pli/dli_preproc.py` | DL/I bridge: `CALL PLITDLI(...)` against an IRIS Global |
 | `pli/javagen.py` | experimental PL/I → Java transpiler (AST → Java source) |
 | `pli/__main__.py` | CLI entry point (`python -m pli`) |
 | `pli/examples/` | demo programs |

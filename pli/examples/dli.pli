@@ -1,0 +1,56 @@
+/* DL/I sample: CALL PLITDLI(...) against the IRIS ^CUSTOMER global.
+   Assumes a database like:
+
+       ^CUSTOMER(1001,"NAME")     = "SMITH"
+       ^CUSTOMER(1001,"CITY")     = "BUDAPEST"
+       ^CUSTOMER(1001,"ORDER",1)  = "A10001"
+       ^CUSTOMER(1001,"ORDER",2)  = "A10002"
+
+   Connection defaults to localhost:1972, namespace SAMPLES, and prompts
+   for credentials; override with the PLI_DLI_HOST/PORT/NAMESPACE/
+   USERNAME/PASSWORD environment variables. See dli_preproc.py. */
+
+DLIPGM: PROC OPTIONS(MAIN);
+
+   DCL DB_PCB_PTR POINTER;             /* unused: single-PCB interpreter */
+   DCL FOUR       FIXED BIN(31) INIT(4);
+
+   DCL GU         CHAR(4) INIT('GU  ');
+   DCL GN         CHAR(4) INIT('GN  ');
+   DCL ISRT       CHAR(4) INIT('ISRT');
+
+   DCL CUSTOMER   CHAR(100);
+   DCL SSA_CUST   CHAR(24) INIT('CUSTOMER(CUSTNO=1001)');
+
+   DCL PLITDLI    ENTRY EXTERNAL;
+
+   /* GU: get a segment directly by its qualified SSA path */
+   CALL PLITDLI(FOUR, GU, DB_PCB_PTR, CUSTOMER, SSA_CUST, 'NAME');
+   PUT SKIP LIST('GU NAME  :', DLISTATUS, TRIM(CUSTOMER));
+
+   CALL PLITDLI(FOUR, GU, DB_PCB_PTR, CUSTOMER, SSA_CUST, 'CITY');
+   PUT SKIP LIST('GU CITY  :', DLISTATUS, TRIM(CUSTOMER));
+
+   /* GU on a segment that doesn't exist -> status GE */
+   CALL PLITDLI(FOUR, GU, DB_PCB_PTR, CUSTOMER, SSA_CUST, 'ZIP');
+   PUT SKIP LIST('GU ZIP   :', DLISTATUS);
+
+   /* GU into a child hierarchy, then GN to walk to the next sibling */
+   CALL PLITDLI(FOUR, GU, DB_PCB_PTR, CUSTOMER, SSA_CUST, 'ORDER', '1');
+   PUT SKIP LIST('GU ORDER/1:', DLISTATUS, TRIM(CUSTOMER));
+
+   CALL PLITDLI(FOUR, GN, DB_PCB_PTR, CUSTOMER);
+   PUT SKIP LIST('GN        :', DLISTATUS, TRIM(CUSTOMER));
+
+   /* ISRT: add a new field under the customer segment */
+   CUSTOMER = 'PESTERZSEBET';
+   CALL PLITDLI(FOUR, ISRT, DB_PCB_PTR, CUSTOMER, SSA_CUST, 'DISTRICT');
+   PUT SKIP LIST('ISRT      :', DLISTATUS);
+
+   /* inserting the same segment again fails with II */
+   CALL PLITDLI(FOUR, ISRT, DB_PCB_PTR, CUSTOMER, SSA_CUST, 'DISTRICT');
+   PUT SKIP LIST('re-ISRT   :', DLISTATUS);
+
+   RETURN;
+
+END DLIPGM;

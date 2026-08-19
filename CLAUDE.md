@@ -14,8 +14,11 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   enforced via .gitattributes).
 - IDE: `python pli_ide.py [file.pli]` or `pli-ide.bat` / `bin/pli-ide`.
 - Regression: run every `pli/examples/*.pli` (skip `empdef.pli` — include
-  member). Stdin fixtures: average=`3 1 2 3`, stage1=`1 2`,
-  stage2=`X=1,Y=2;` + `AAAABBBB  111.25`. Delete `stage4_*.dat` and
+  member; skip `sqldemo_db2.pli` — needs a real Db2; skip `dli.pli` —
+  needs a real IRIS instance, see DL/I section below). Stdin fixtures:
+  average=`3 1 2 3`, stage1=`1 2`, stage2=`X=1,Y=2;` +
+  `AAAABBBB  111.25`, javaext=`ROW=5 COL=5;`. stage9 needs stage9sub.pli
+  passed alongside it (separate compilation). Delete `stage4_*.dat` and
   `pli/examples/sqldemo.sqlite` afterwards.
 - Grammar check after parser edits:
   `python -c "from pli.parser import PLIParser; PLIParser().build(write_tables=False)"`
@@ -51,7 +54,7 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   only). CHARACTER pp-values substitute as RAW text — a string constant
   value must itself contain quotes.
 - `sql.py` EXEC SQL runtime — see SQL section.
-- `javagen.py` PL/I → Java transpiler (v0.9.0, experimental) — see
+- `javagen.py` PL/I → Java transpiler (v0.12.0, experimental) — see
   Java transpiler section below.
 - Storage classes: BASED/POINTER are object-reference semantics, NOT
   byte overlay; UNSPEC works per-scalar via struct (still true as of
@@ -148,7 +151,60 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   self-heals by os.add_dll_directory(site-packages/clidriver/bin).
   User's Db2: localhost:25000/sample, user maga1, prompts for password.
 
-## Java transpiler (pli/javagen.py, v0.10.0, experimental — separate
+## DL/I support (pli/dli_preproc.py)
+- `CALL PLITDLI(count, call-code, pcb-ptr, io-area [, ssa...])`
+  intercepted in `exec_CallStmt` (checked BEFORE `_resolve_entry`, so it
+  never touches the ENTRY-variable machinery — `DCL PLITDLI ENTRY
+  EXTERNAL;` still declares a normal uninitialized ENTRY variable via
+  the existing v0.7.0 path, it's just never resolved/called through).
+  `count`/`pcb-ptr` are accepted but ignored — this bridge talks to
+  exactly one database/PCB, mirroring how sql.py assumes "one current
+  connection" unless SET CONNECTION is used.
+- `IRISDLI` (in dli_preproc.py, adapted from the owner's reference
+  `iris_dli.py`) treats one IRIS Global as a hierarchical DB: GU/GN/
+  GNP/GHU/GHN/GHNP/ISRT/DLET/REPL, hold-locking via `db.lock`/`unlock`.
+  REAL BUG found and fixed while integration-testing against the
+  owner's live IRIS instance (localhost:1972, namespace SAMPLES, empty
+  credentials): the IRIS Python driver's `.get()` returns `None` (not
+  `""`) for both an unset leaf AND a branch node with only descendants
+  — the reference code's `_exists`/`_get` assumed `""` was the only
+  "no value" sentinel (same convention `_next_subscript` already
+  normalizes), so `None != ""` made `_exists` wrongly report every
+  nonexistent segment as present. Fixed by normalizing `_get()`'s
+  result the same way `_next_subscript` already does.
+  `DLIBridge.execute()` maps a call-code + SSA list onto one `IRISDLI`
+  call; `ssa_subscript()` reduces each SSA CHAR value to one subscript
+  level (bare name used as-is, `NAME(FIELD=VALUE)` contributes VALUE —
+  the Global is positional, not field-addressed, so FIELD is
+  documentation only).
+- Lazy connection via `self.dlirt` (mirrors `self.sqlrt`'s lazy-import,
+  lazy-connect pattern exactly): `dli_preproc.connect()` only imports
+  `iris` on the first actual `CALL PLITDLI`, so the driver stays an
+  optional dependency like ibm_db. Connection params come from
+  `PLI_DLI_HOST/PORT/NAMESPACE/USERNAME/PASSWORD/GLOBAL` env vars, with
+  credentials falling back to an interactive prompt — `_first()`'s
+  `is None` checks (not truthiness) matter here since an empty IRIS
+  username/password is a legitimate value, not "unset".
+- Status of the last call surfaces via the `DLISTATUS` niladic builtin
+  (`OK`/`GE`/`GB`/`GP`/`II`/`NOTHELD`/`NOLOCK`) — there's no PCB struct
+  to read a status field from, unlike real DL/I.
+- pli/examples/dli.pli: GU (hit + miss), GU into a child hierarchy then
+  GN to the next sibling, ISRT + duplicate-ISRT rejection (II) — run
+  live against the owner's IRIS instance via --diff-style manual
+  verification (no sqlite-equivalent offline fallback exists for IRIS,
+  unlike sql.py's `sqlite` driver — DL/I testing needs the real IRIS
+  instance running).
+- Origin note: this was first built in the stale pre-repo copy at
+  `C:\Users\maga1\Documents\code\pli\` (a separate session, unaware of
+  the "do not edit" note above) and even pushed to a new, unrelated
+  `github.com/markons/pli` repo before the owner caught the mixup and
+  asked for it to be ported here instead. `markons/pli` was NOT
+  deleted (owner's choice) — it now has a stale, duplicate copy of
+  this feature; this repo is the one to keep developing.
+- NOT committed/pushed yet — awaiting owner test/approval per the
+  standing convention above.
+
+## Java transpiler (pli/javagen.py, v0.12.0, experimental — separate
 ## track from the roadmap's "transpile-to-Python" perf item, don't conflate)
 - Real AST→Java source codegen (not an interpreter, not a serialized-AST
   runner) reusing pli's own lexer/parser (no separate grammar). Runtime:
@@ -158,7 +214,184 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   (`--diff` also runs `python -m pli` and byte-compares stdout, with
   \r\n normalized out first — Python's stdout is CRLF on Windows, Java's
   PrintStream never is, a platform artifact not a behavior diff — the
-  actual validation method; all 7 example programs below pass this way).
+  actual validation method; all 10 example programs below pass this way,
+  `javaext.pli` needs `--diff --stdin "ROW=5 COL=5;"` since it exercises
+  `GET DATA`).
+- v0.12.0: RECORD I/O (medium tier, item 2 of 6 — remaining: PICTURE,
+  BASED/POINTER/CONTROLLED, exact FIXED DECIMAL, EXEC SQL; owner said
+  "record i/o and picture are the next to go", overriding my own
+  suggested order of BASED/POINTER/CONTROLLED next — PICTURE not yet
+  started as of this entry).
+  - Scope, deliberately narrower than the interpreter's full record I/O:
+    CONSECUTIVE (one record per line) + INDEXED (in-memory `TreeMap`,
+    persisted as `key\trecord` lines on CLOSE) only. `LOCATE` mode,
+    `EXCLUSIVE` files, `ENV(REGIONAL(...))`, `EVENT(...)` on record I/O,
+    `UNLOCK`, and `SET(...)` (BASED-variable READ) all raise a clear
+    CodegenError rather than silently mistranslating — matches how
+    structures scoped out arrays-of-structures/REFER/BY NAME last round.
+  - `VarInfo` gained kind="file" + `file_indexed` bool. `jtype()` for
+    "file" returns `"PLI.PLIFile"` with NO `[]` (a plain object
+    reference, like "struct" — not scalar-boxed since CALL-by-ref on a
+    FILE was never a requirement here). `_var_info_file()` parses
+    `DCL f FILE [RECORD] [KEYED] [ENV(INDEXED)]`; ENV(REGIONAL)/
+    EXCLUSIVE/STREAM/PRINT all CodegenError (STREAM/PRINT need no DCL
+    at all in this backend — PUT/GET LIST/EDIT already target
+    stdin/stdout directly).
+  - REAL BUG caught before it ever ran (not by javac or --diff — by
+    rereading `_emit_field` before writing the test): the first version
+    emitted `new PLI.PLIFile(name)` for every FILE declare and never set
+    `.indexed` on the instance, so EVERY file — including
+    `ENV(INDEXED)` ones — would have silently behaved as CONSECUTIVE
+    (Java's `boolean indexed` field defaults false). A class-body field
+    initializer can't run an extra statement to set it after
+    construction, so fixed via a small `PLI.mkFile(name, indexed)`
+    static factory in the runtime instead of a second PLIFile
+    constructor or an instance-initializer-block workaround.
+  - `_leaf_width`/`_gen_record_from`/`_gen_record_into`/
+    `_store_string_into_leaf` mirror the interpreter's `_leaf_width`/
+    `_record_of_value`/`_fill_from_record` EXACTLY (verified by reading
+    them first): CHAR/BIT left-justified to declared length or a 24/8
+    default, FIXED right-justified width 12, FLOAT/COMPLEX/EVENT
+    right-justified width 24 (COMPLEX/EVENT as a record leaf is an
+    unlikely edge case, accepted as-is — `PLI.toStr` has no overload for
+    them, so it would be a javac error, not a silent wrong answer).
+    `gen_IOStmt` dispatches OPEN/CLOSE/READ/WRITE/REWRITE/DELETE;
+    KEY/KEYFROM/KEY-for-DELETE all funnel through `_gen_key_text`
+    (`PLI.toStr` for numeric operands, `.trim()` for CHAR/BIT — mirrors
+    `_file_key`'s `to_string(v).strip()`, non-REGIONAL case only, the
+    only case this backend supports).
+  - REAL PRE-EXISTING BUG found via recio.pli, unrelated to record I/O
+    itself: `'L00' || I` (CONCAT with a FIXED operand) generated
+    `PLI.concat("L00", I[0])` — `PLI.concat(String,String)` doesn't
+    accept a `long`, so this failed to compile. The interpreter's own
+    CONCAT always stringifies BOTH operands via `to_string()` regardless
+    of type (confirmed by reading `exec_BinOp`), so `'L00' || I` is
+    valid PL/I that the Java backend had never actually exercised before
+    (stage4.pli uses this exact idiom but was never run through
+    build_java.py). Fixed via `_as_concat_string()` (long/double →
+    `PLI.toStr`, boolean → `PLI.b`, string/bitstring as-is, else a
+    CodegenError) threaded through `eval_BinOp`'s CONCAT case.
+  - pli/examples/recio.pli: INDEXED (write 3, read by KEY, REWRITE,
+    DELETE, sequential read with KEYTO bounded by a known count of 2 —
+    NOT by ON ENDFILE, since ON-conditions still aren't supported here)
+    + CONSECUTIVE (write 2, read back 2), reusing empdef.pli's EMP
+    layout via `%INCLUDE` like stage4.pli. Verified byte-for-byte
+    against `python -m pli` via --diff.
+  - Full existing example suite (10 programs) re-verified after the
+    CONCAT fix — all still byte-for-byte identical, no regressions.
+  - NOT committed/pushed yet — awaiting owner test/approval per the
+    standing convention; 4 medium-tier items remain (PICTURE,
+    BASED/POINTER/CONTROLLED, exact FIXED DECIMAL, EXEC SQL).
+- v0.11.0: STRUCTURES (medium tier, item 1 of 6 — remaining: PICTURE,
+  BASED/POINTER/CONTROLLED, record I/O, exact FIXED DECIMAL, EXEC SQL;
+  owner asked to "go on with the medium features", this was landed as
+  its own checkpoint rather than pushing through all 6 unreviewed).
+  Pure pli/javagen.py + 2 new examples, ZERO changes to javart/PLI.java
+  or the interpreter — verify via `git status --short` if this claim
+  ever looks stale.
+  - `StructType` (java_class_name, members dict name->VarInfo-or-
+    StructType, order list, spec=(level,subitems) kept for LIKE) is the
+    codegen-side analog of PLIStructure. `VarInfo` gained kind="struct"
+    + `struct_type`; jtype() for a struct returns the class name with
+    NO `[]` — structures are already Java reference types, no
+    1-element-array boxing needed for CALL-by-ref (unlike every other
+    kind).
+  - `group_declares()` mirrors exec_Declare's flat-list level-1/level-N
+    grouping EXACTLY (verified by reading it first, not guessed) —
+    needed because collect_declares() flattens ALL DeclItems across
+    every DCL statement in a procedure into one list with no structure
+    grouping at all; this was true before too but only mattered once
+    structures existed.
+  - CRITICAL DESIGN POINT, cost a real compile error to discover: Java
+    classes are nominal-typed, but PL/I structure PARAMETERS are matched
+    STRUCTURALLY (the callee just redeclares the shape it expects — see
+    interpreter.py's `_declare_structure_inner`: "structure parameter:
+    keep the caller's structure", no deep validation). Naively
+    generating one fresh Java class per DCL occurrence means a
+    structurally-identical parameter redeclaration gets an INCOMPATIBLE
+    type from the caller's variable — `new GIVE_RAISE().invoke(EMP, ...)`
+    failed to compile ("_Struct1 cannot be converted to _Struct5") the
+    first time through. Fixed with `_struct_signature()` (level + each
+    member's resolved VarInfo fields, recursive, hashable — built from
+    RESOLVED types, not raw AST nodes, since two separate DeclItem
+    parses of literally the same text are different object instances)
+    + `self.struct_cache` (signature -> StructType) in `_new_struct_type()`,
+    so identical shapes — whether from LIKE, independent DCLs, or a
+    parameter's local redeclaration — share ONE generated class. This
+    also means `LIKE` and its target automatically end up as the same
+    class for free (no separate LIKE-aliasing logic needed).
+  - Struct-type class bodies are generated into a temporarily redirected
+    `self.lines`/`self.indent` buffer (so the existing indent-aware
+    `self.w()` machinery just works), then appended to `self.struct_defs`
+    and spliced into the final output at a saved position (right after
+    main(), before the procedure classes) once ALL procedures have been
+    generated — struct declarations are discovered mid-procedure, so
+    they can't be emitted in their final position until everything else
+    is done.
+  - Qualified/unqualified/partial-qualification member resolution is
+    ALL compile-time (unlike the interpreter, which resolves `.find()`/
+    `_search_member()` at runtime): `_resolve_struct_node()` walks a
+    Ref/Member AST node down to (java_text, VarInfo-or-StructType);
+    `_find_in_struct()` mirrors PLIStructure.find (direct member wins
+    immediately, else a UNIQUE recursive nested-match, ambiguous ==
+    CodegenError); `_search_unqualified()`/`_search_unqualified_in()`
+    mirror `_search_member` EXACTLY including its "innermost scope with
+    ANY hit wins" rule (ambiguity is only checked within that one scope
+    level, not across the whole chain) — ctx.parent-chained, same
+    mechanism as plain-variable lookup.
+  - REAL BUG (not just a gap) found via structest2.pli: the first
+    `_search_unqualified_in` iterated `syms_dict.values()` and returned
+    `_find_in_struct`'s path AS-IS — but that path is relative to the
+    STRUCTURE TYPE, missing the structure VARIABLE's own name at the
+    front. `ID = 42;` (meaning REC.ID) silently compiled to a top-level
+    `ID[0] = 42L;` referencing a field that doesn't exist — caught by
+    javac ("cannot find symbol ID"), not by any Python-side check. Fixed
+    by iterating `.items()` and prepending the variable name to the path.
+  - Structure assignment (`_gen_struct_assign`) mirrors
+    interpreter._assign_structure: struct=struct is leaf-by-leaf
+    (arrays copied element-wise, scalars direct), same shape (leaf
+    count) required; struct=scalar broadcasts to every leaf but — Java
+    static typing forces a NARROWER rule than PL/I's per-leaf automatic
+    conversion — every leaf must share the source's Java kind, or a
+    clear CodegenError, not a javac type error or silent wrong output.
+  - PUT LIST on a whole array or whole structure unrolls to individual
+    elements/leaves AT CODEGEN TIME (`_flatten_put_list_item`, sizes are
+    known constants for concrete arrays), matching the interpreter's
+    runtime `list(arr.data)` / `leaf_values()` — NOT a runtime loop.
+    First version of this had a bug: it called the array-flattening
+    helper unconditionally on every struct leaf, including SCALAR
+    leaves, which don't need `[idx]` flattening, just a `[0]` value
+    access — wrongly treated every scalar leaf as an "unsupported
+    assumed-size array". Fixed by branching on `linfo.is_array` first.
+  - `CALL P(EMP.SALARY)` (a structure MEMBER passed by reference) now
+    works too, not just a bare structure variable: `_byref_arg_text()`
+    generalizes the old bare-Ref-only by-ref check through
+    `_resolve_struct_node`, stripping a trailing `[0]` to get the
+    box/array reference instead of the value (structures/arrays already
+    have no `[0]` to strip, used as-is).
+  - Scope boundary, deliberate, not yet fixed: `_sym()` (used by GET
+    LIST, HBOUND, WAIT, CALL EVENT, etc.) does NOT fall back to
+    unqualified member search — its callers independently do
+    `sanitize(name)` assuming the name IS the java field directly, so
+    extending _sym alone without updating every call site would produce
+    a subtly wrong (unqualified, not the resolved qualified path) text.
+    Given time constraints this was left as a narrow, documented gap
+    rather than threading the fix through every caller.
+  - Scope cuts for this round (CodegenError, named clearly): arrays of
+    structures, BASED/CONTROLLED structures, REFER, structure aggregate
+    expressions (S3=S1+S2), BY NAME assignment, whole-array/whole-struct
+    refs in a GET DATA list (PUT DATA supports them; GET DATA doesn't).
+  - pli/examples/structest.pli (nested structs, LIKE, qualified/partial
+    access, struct assignment, struct CALL param) and structest2.pli
+    (unqualified member write+read, array member inside a structure,
+    CALL passing a structure MEMBER by reference) — both verified
+    identical between python -m pli and the Java backend via --diff.
+  - NOT committed/pushed yet — this is a checkpoint pause, not a stop;
+    5 more medium-tier items remain (PICTURE, BASED/POINTER/CONTROLLED,
+    record I/O, exact FIXED DECIMAL, EXEC SQL), each comparable in size
+    to structures alone or larger (SQL especially). Deliberately landed
+    as a separate, reviewable unit rather than one giant multi-feature
+    diff.
 - Repr: every scalar is a 1-element Java array (long[1]/double[1]/
   String[1]) so CALL-by-ref is plain aliasing (mirrors interpreter's
   Variable box); PL/I arrays → plain Java arrays (already refs, no

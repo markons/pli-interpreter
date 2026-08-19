@@ -1,5 +1,7 @@
 ﻿ply>=3.11
 # optional, for the ibm_db driver of EXEC SQL:
 # ibm_db>=3.2
+# optional, for CALL PLITDLI (DL/I against an IRIS Global):
+# intersystems-irispython
 # optional, only for scripts/build.py (standalone CLI executable):
 # pyinstaller>=6.0
