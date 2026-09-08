@@ -58,11 +58,13 @@ pli.bat myprog.pli
 ```
 
 On Linux/macOS use the `bin/` launchers (add `bin/` to your `PATH`
-for plain `pli myprog.pli`):
+for plain `pli myprog.pli`), or the root-level `.sh` scripts if you'd
+rather run from the repo root without touching `PATH` — both mirror
+the `.bat` files 1:1 and do the same thing:
 
 ```
-bin/pli myprog.pli
-bin/pli-ide myprog.pli
+bin/pli myprog.pli          # or: ./pli.sh myprog.pli
+bin/pli-ide myprog.pli      # or: ./pli-ide.sh myprog.pli
 ```
 
 Programmatic API:
@@ -435,8 +437,9 @@ frozen binary bundles sqlite for `EXEC SQL` but not the Db2 driver
 (`ibm_db` pulls in a native client library with its own redistribution
 terms) — Db2 support needs the source install (`pip install ibm_db`).
 
-**`pli-build`** (`pli/build.py`, run via `bin/pli-build` / `pli-build.bat`
-or `python -m pli.build`) does the same two jobs as `scripts/build.py`
+**`pli-build`** (`pli/build.py`, run via `bin/pli-build` / `./pli-build.sh`
+/ `pli-build.bat` or `python -m pli.build`) does the same two jobs as
+`scripts/build.py`
 above, but as a shipped, always-available tool rather than a dev-only
 script — it's also what the IDE's **Build EXE...** button (see *The
 IDE* below) calls:
@@ -484,11 +487,12 @@ chmod +x pli/examples/shebang_demo.pli && ./pli/examples/shebang_demo.pli
 | `pli/examples/` | demo programs |
 | `pli_ide.py` | Tkinter IDE (edit / compile / run) |
 | `pli.bat`, `pli-ide.bat` | Windows launchers |
-| `bin/pli`, `bin/pli-ide` | Unix (Linux/macOS) launchers |
+| `bin/pli`, `bin/pli-ide` | Unix (Linux/macOS) launchers (`PATH`-friendly) |
+| `pli.sh`, `pli-ide.sh` | same Unix launchers, root-level (no `PATH` setup needed) |
 | `scripts/build.py` | builds a standalone CLI executable (PyInstaller) |
 | `scripts/pli_cli_entry.py` | PyInstaller entry point for the CLI |
 | `pli/build.py` | `pli-build` tool: freeze a program (or the interpreter) via PyInstaller at run time |
-| `bin/pli-build`, `pli-build.bat` | launchers for `pli-build` |
+| `bin/pli-build`, `pli-build.sh`, `pli-build.bat` | launchers for `pli-build` |
 | `bin/pli-build-selftest` | checks `pli-build`'s two modes against `hello.pli` |
 | `pli/include_fetch.py` | `%INCLUDE` DB2 source-repository fallback fetch/cache |
 | `.github/workflows/release.yml` | CI: builds + releases Windows/Linux binaries per tag |

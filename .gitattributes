@@ -1,4 +1,5 @@
 # shell scripts must stay LF even when checked out on Windows
 bin/* text eol=lf
+*.sh text eol=lf
 # batch files must stay CRLF even when checked out on Unix
 *.bat text eol=crlf
