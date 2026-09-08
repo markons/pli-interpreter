@@ -46,6 +46,9 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ENTRY = os.path.join(ROOT, "scripts", "pli_cli_entry.py")
 DIST = os.path.join(ROOT, "dist")
 BUILD = os.path.join(ROOT, "build", "pyinstaller")
+# Generated PyInstaller entry scripts are kept here (not under build/, which
+# --clean wipes) so they can be inspected after the build.
+PYTHONCODE_DIR = os.path.join(ROOT, "pythoncode")
 
 sys.path.insert(0, ROOT)
 
@@ -149,9 +152,10 @@ def build_interpreter():
     exe = os.path.join(folder, "pli" + _exe_suffix())
     hello = os.path.join(folder, "examples", "hello.pli")
     print("\nSmoke test: %s %s" % (exe, hello))
-    result = subprocess.run([exe, hello], capture_output=True, text=True)
+    result = subprocess.run([exe, hello], input="World\n",
+                            capture_output=True, text=True)
     print(result.stdout, end="")
-    if result.returncode != 0 or "HELLO, WORLD" not in result.stdout:
+    if result.returncode != 0 or "AND HELLO," not in result.stdout:
         print("SMOKE TEST FAILED (exit %d)" % result.returncode,
              file=sys.stderr)
         print(result.stderr, file=sys.stderr)
@@ -229,7 +233,7 @@ def build_program(paths, output_name):
     print("Compiling %s -> %s%s ..."
          % (", ".join(paths), name, _exe_suffix()))
 
-    entry_dir = os.path.join(BUILD, name)
+    entry_dir = os.path.join(PYTHONCODE_DIR, name)
     entry = _generate_program_entry(paths, entry_dir)
     exe_path = run_pyinstaller(entry, name)
     print("\nBuilt: " + exe_path)

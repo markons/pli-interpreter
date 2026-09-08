@@ -1,4 +1,7 @@
 HELLO: PROCEDURE OPTIONS(MAIN);
-   PUT LIST('HELLO, WORLD!');
-   PUT SKIP LIST('PL/I lives again.');
+   DECLARE NAME CHAR(20) VARYING;
+   PUT LIST('HELLO FROM THE PL/I IDE!; now press enter and type a name!');
+   GET LIST(NAME);
+   PUT SKIP LIST('AND HELLO,', NAME);
+   return(0);
 END HELLO;

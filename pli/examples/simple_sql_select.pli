@@ -1,0 +1,23 @@
+/* test db2 select                            */
+SQLDEMO: PROC OPTIONS(MAIN);
+  
+   DCL (CTR)  FIXED BIN;
+
+   EXEC SQL INCLUDE SQLCA;
+   EXEC SQL WHENEVER SQLERROR GOTO SQLFAIL;
+
+   EXEC SQL CONNECT TO DTT1;
+   PUT LIST('connected, sqlcode =', SQLCODE);
+ 
+
+   /* singleton SELECT INTO */
+   employeeID = 102;
+   EXEC SQL SELECT count(*) INTO :ctr 
+            FROM employee;
+   PUT SKIP LIST('employee ctr:', ctr);
+
+SQLFAIL:
+   PUT SKIP LIST('*** SQL error', SQLCODE, SQLSTATE);
+   PUT SKIP LIST(SQLERRM);
+END SQLDEMO;
+

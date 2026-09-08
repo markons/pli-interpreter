@@ -26,6 +26,9 @@ class PreprocError(Exception):
     pass
 
 
+_MAX_INCLUDE_DEPTH = 20
+
+
 _TOKEN_RE = re.compile(r"""
     (?P<comment>/\*.*?\*/)
   | (?P<string>'(?:[^']|'')*')
@@ -50,6 +53,8 @@ class Preprocessor:
         self.include_dir = include_dir
         self.vars = {}        # name -> (type, value)
         self.active = set()
+        self._include_depth = 0
+        self._db_fallback_cfg = None   # lazily probed; False = "checked, none"
 
     def process(self, text):
         toks = _tokenize(text)
@@ -98,6 +103,28 @@ class Preprocessor:
             i += 1
         raise PreprocError("unterminated % statement")
 
+    def _fetch_include_fallback(self, fname, orig_error):
+        """Called when %INCLUDE fname isn't a local file. If pli_dbc.json
+        has a "_source_repository" block, fetch+cache the member from
+        there; otherwise re-raise the original local-file error."""
+        if self._db_fallback_cfg is None:
+            from .include_fetch import get_fallback_config
+            cfg, full_config, config_dir = get_fallback_config(
+                self.include_dir)
+            self._db_fallback_cfg = (
+                (cfg, full_config, config_dir) if cfg else False)
+        if not self._db_fallback_cfg:
+            raise PreprocError("%%INCLUDE %s: %s" % (fname, orig_error))
+        cfg, full_config, config_dir = self._db_fallback_cfg
+        name = os.path.splitext(fname)[0].upper()
+        from .include_fetch import fetch_and_cache, IncludeFetchError
+        try:
+            return fetch_and_cache(name, cfg, full_config, config_dir)
+        except IncludeFetchError as e:
+            raise PreprocError(
+                "%%INCLUDE %s: %s; source-repository fallback also "
+                "failed: %s" % (fname, orig_error, e))
+
     # ---- statements -------------------------------------------------------
 
     def _pp_statement(self, toks, i, out):
@@ -134,8 +161,16 @@ class Preprocessor:
                 with open(path, "r", encoding="utf-8") as h:
                     text = h.read()
             except OSError as e:
-                raise PreprocError("%%INCLUDE %s: %s" % (fname, e))
-            out.extend(self._run(_tokenize(text)))
+                text = self._fetch_include_fallback(fname, e)
+            if self._include_depth >= _MAX_INCLUDE_DEPTH:
+                raise PreprocError(
+                    "%%INCLUDE %s: include depth exceeds %d "
+                    "(circular %%INCLUDE?)" % (fname, _MAX_INCLUDE_DEPTH))
+            self._include_depth += 1
+            try:
+                out.extend(self._run(_tokenize(text)))
+            finally:
+                self._include_depth -= 1
             return i
         if word == "IF":
             return self._pp_if(toks, i + 1, out)

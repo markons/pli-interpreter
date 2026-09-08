@@ -14,12 +14,17 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   enforced via .gitattributes).
 - IDE: `python pli_ide.py [file.pli]` or `pli-ide.bat` / `bin/pli-ide`.
 - Regression: run every `pli/examples/*.pli` (skip `empdef.pli` — include
-  member; skip `sqldemo_db2.pli` — needs a real Db2; skip `dli.pli` —
-  needs a real IRIS instance, see DL/I section below). Stdin fixtures:
+  member; skip `sqldemo_db2.pli` and `sqldemo.pli` — both need a real
+  Db2 (`sqldemo.pli` now targets a live internal ABS connection, not
+  offline); skip `dli.pli` — needs a real IRIS instance, see DL/I
+  section below). Stdin fixtures: hello=`World` (GET LIST NAME),
   average=`3 1 2 3`, stage1=`1 2`, stage2=`X=1,Y=2;` +
-  `AAAABBBB  111.25`, javaext=`ROW=5 COL=5;`. stage9 needs stage9sub.pli
-  passed alongside it (separate compilation). Delete `stage4_*.dat` and
-  `pli/examples/sqldemo.sqlite` afterwards.
+  `AAAABBBB  111.25`, javaext=`ROW=5 COL=5;`. stage9 needs
+  stage9sub.pli passed alongside it (separate compilation). Delete
+  `stage4_*.dat` afterwards.
+  `pli/examples/include_fetch_demo/test_include_fetch.py` is a
+  self-contained scripted test (builds its own sqlite fixture, runs
+  itself, cleans up) — run standalone, not part of the plain-.pli sweep.
 - Grammar check after parser edits:
   `python -c "from pli.parser import PLIParser; PLIParser().build(write_tables=False)"`
   (must build with no conflicts; delete any `parser.out`).
@@ -61,6 +66,40 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   v0.7.0 — see below). DO REPEAT, REGIONAL(2/3), GENERIC: unsupported
   (BY NAME v0.5, REGIONAL(1) v0.6, cross-sections v0.5 — this line was
   stale, corrected 2026-07).
+- v0.9.0 additions: %INCLUDE DB2 source-repository fallback (ai4pli/
+  pli-tools-vscode's "recursive include resolver" concept, ported
+  narrowly — this preprocessor is already a real recursive-descent
+  process, so only the fetch-on-miss part was new; no BFS/queue/level-
+  tracking needed, unlike ai4pli's own regex-scanner-bolted-onto-a-
+  DB-extractor design). `preproc.py`'s `%INCLUDE` OSError branch now
+  calls `Preprocessor._fetch_include_fallback` (lazily probes
+  `pli_dbc.json` for an optional `"_source_repository"` block, cached
+  on `self._db_fallback_cfg`, `False` sentinel = checked/not
+  configured — zero behavior change when absent) before raising;
+  delegates to new `pli/include_fetch.py`
+  (`get_fallback_config`/`fetch_and_cache`/`IncludeFetchError`), which
+  checks a local cache dir first (never re-fetches; the cache file
+  being a real `.pli` file is what makes a fetched member's own nested
+  `%INCLUDE`s recurse through the ordinary local-file path with no new
+  logic), else queries `table WHERE name_column = ?` for one member at
+  a time and restores CLOB newlines via `newline_char`. Any fetch
+  failure raises `PreprocError` combining the original local-miss
+  reason with the fetch-failure reason — never a silent skip.
+  `sql.py`'s `SqlRuntime._connect` had its connection-building body
+  factored into a module-level `connect_raw(cfg, key, config_dir,
+  password_prompt)` (no `Interpreter`/`SqlRuntime` needed) so
+  `include_fetch.py` reuses the exact same driver/Kerberos/SSL/JDBC
+  logic (`_connect_jdbc_kerberos_ssl` etc.) with zero duplication;
+  `_connect` is now a thin wrapper. Bundled adjacent fix: `preproc.py`
+  had zero protection against circular `%INCLUDE` (crashed with a raw
+  `RecursionError`) — `Preprocessor._include_depth` + module constant
+  `_MAX_INCLUDE_DEPTH = 20` now raises a clean `PreprocError` instead;
+  purely local, no DB2 involved, verified with a plain `A→B→A` cycle.
+  `examples/include_fetch_demo/` demonstrates the whole path offline
+  via the `sqlite` driver (own `pli_dbc.json`, `build_fixture.py`
+  creates a `SOURCE_REPO` table mimicking DB2's CCMOBJT/CCMTYPT/QUELLE
+  columns, `test_include_fetch.py` proves both the fetch-and-cache run
+  and a cache-only run with the table emptied).
 - v0.7.0 additions (object-graph features; NOT byte-accurate storage
   — see roadmap note below, that's a separate, larger effort):
   REFER self-defining structures (bound tuple ("REFER",expr,name);
@@ -138,6 +177,30 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   Drivers: `sqlite` (stdlib, offline tests) and `ibm_db` (Db2;
   `jdbc:db2://host:port/db` URL parsed into native DSN). Missing
   "password" ⇒ `interp.password_prompt` (getpass in CLI, dialog in IDE).
+  `"securityMechanism": "11"` on an ibm_db connection ⇒ Kerberos: DSN
+  gets AUTHENTICATION=KERBEROS instead of PWD=, no password prompt;
+  Windows SSPI/prior kinit supplies the ticket (typical for Db2 LUW —
+  z/OS stays on password auth).
+- Kerberos + SSL together (`"ssl": true` alongside securityMechanism
+  11 — some Db2 LUW hosts mandate both, e.g. port 50200): ibm_db's
+  native CLI driver has no GSKit keystore for SSL, so this combo
+  routes through JDBC instead (jaydebeapi/JPype embeds a JVM;
+  `_connect_jdbc_kerberos_ssl` in sql.py). Needs jaydebeapi+JPype1, a
+  JVM, and an IBM Db2 JCC jar — `_find_jcc_jar` prefers DbVisualizer's
+  bundled jar (JCC 4.32.28) over the IBM Data Server Driver's
+  db2jcc4.jar (JCC 4.34.30 throws a DSS chained-parse error,
+  ERRORCODE=-4499, against TLS-1.3-capable servers even when
+  `-Djdk.tls.client.protocols=TLSv1.2` is forced); override via
+  `"jdbc_jar_path"`. `_create_jaas_config` writes a JAAS login config
+  pointing at the Kerberos ticket cache (Windows SSO or a prior
+  `kinit`); `"realm"` in pli_dbc.json is the CALLER's own realm for
+  the JAAS principal (e.g. "ALLIANZDE.ROOTDOM.NET") — NOT the DB2
+  server's realm, which only goes in `"kerberosServerPrincipal"`
+  (e.g. "db2agl1/host@SERVER.REALM"); swapping them still authenticates
+  with a valid ticket but the server-side GSS handshake then fails
+  with a GSSException. Cross-realm (user realm ≠ server realm, e.g.
+  AD trust): `-Djavax.security.auth.useSubjectCredsOnly=false` lets
+  Windows SSPI do the ticket referral (Java's own GSSAPI can't).
 - Precompiler-layer statements: CONNECT TO/RESET, SET CONNECTION,
   SELECT INTO (+100/-811), DECLARE/OPEN/FETCH/CLOSE cursor, COMMIT/
   ROLLBACK, WHENEVER (SQLERROR/SQLWARNING/NOT FOUND ×

@@ -12,8 +12,22 @@ parsetab.py
 # data files created by PL/I record I/O examples
 *.dat
 
+# %INCLUDE DB2 source-repository fallback cache, and its offline demo's
+# generated sqlite fixture
+.pli_include_cache/
+pli/examples/include_fetch_demo/include_fetch_demo.sqlite
+
 # PyInstaller build output (built by scripts/build.py or CI; release
 # binaries are attached to GitHub Releases, not committed)
 /build/
 /dist/
 *.spec
+
+# generated PyInstaller entry scripts (scripts/build.py and pli/build.py
+# both write here instead of a temp dir, so they can be inspected after
+# a build -- but they're regenerated every build, not source)
+/pythoncode/
+
+# editor/IDE-extension auto-backups seen on .pli files (not written by
+# anything in this project)
+.pli-snapshots/

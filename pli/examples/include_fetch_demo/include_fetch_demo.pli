@@ -1,0 +1,9 @@
+/* %INCLUDE fallback to a DB2 "source repository" table: REMOTEMEM
+   does not exist as a local file -- it is fetched from the table
+   configured under "_source_repository" in pli_dbc_include_fetch.json,
+   cached under .pli_include_cache/, then included normally.        */
+INCFETCHDEMO: PROC OPTIONS(MAIN);
+   PUT LIST('before include');
+   %INCLUDE REMOTEMEM;
+   PUT SKIP LIST('after include');
+END INCFETCHDEMO;

@@ -5,7 +5,21 @@
   },
   "SAMPLE": {
     "driver": "ibm_db",
-    "url": "jdbc:db2://localhost:25000/sample",
-    "user": "maga1"
+    "url": "jdbc:db2://172.22.90.228:50000/SAMPLE",
+    "user": "db2inst1"
+  },
+  "DTT1": {
+    "driver": "ibm_db",
+    "url": "jdbc:db2://adt0.muc.allianz:6030/DTT1",
+    "user": "if7xm6f"
+  },
+  "AZDO0D1O": {
+    "driver": "ibm_db",
+    "url": "jdbc:db2://azdo0d1o.abs.azd.srv.allianz:50200/AZDO0D1O",
+    "user": "if7xm6f",
+    "securityMechanism": "11",
+    "ssl": true,
+    "realm": "ALLIANZDE.ROOTDOM.NET",
+    "kerberosServerPrincipal": "db2agl1/azdo0d1o.abs.azd.srv.allianz@DEV.ABS.AZD.SRV.ALLIANZ"
   }
 }

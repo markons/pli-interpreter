@@ -1,0 +1,26 @@
+/* Embedded SQL against a Db2 LUW connection secured by Kerberos
+   (securityMechanism "11") -- and, when the host also mandates SSL,
+   transparently over the JDBC/JAAS path (see pli/sql.py). No password
+   is sent; Windows SSPI or a prior `kinit` supplies the ticket. Point
+   the CONNECT below at a connection name defined in pli_dbc.json,
+   e.g. the AZDO0D1O sample entry.                                    */
+SQLDEMO: PROC OPTIONS(MAIN);
+   DCL X FIXED;
+
+   EXEC SQL INCLUDE SQLCA;
+   EXEC SQL WHENEVER SQLERROR GOTO SQLFAIL;
+
+   EXEC SQL CONNECT TO AZDO0D1O;
+   PUT LIST('connected, sqlcode =', SQLCODE);
+
+   /*EXEC SQL SELECT 1 INTO :X FROM SYSIBM.SYSDUMMY1;*/
+   exec sql select count(*) into :x from abs.tvertrag;
+   PUT SKIP LIST('select ok, x =', X, 'sqlcode =', SQLCODE);
+
+   EXEC SQL CONNECT RESET;
+   RETURN;
+
+SQLFAIL:
+   PUT SKIP LIST('*** SQL error', SQLCODE, SQLSTATE);
+   PUT SKIP LIST(SQLERRM);
+END SQLDEMO;

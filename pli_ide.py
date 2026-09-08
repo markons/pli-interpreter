@@ -12,6 +12,10 @@ Three functions:
      under the output pane activates and the program waits for you to
      type a line (Enter/Send).  A line of "/*" or the EOF button
      signals end-of-file (raises the ENDFILE condition).
+  4. Build EXE... (Run menu) - freezes the current file into a
+     standalone executable via pli.build (PyInstaller). The generated
+     PyInstaller entry script lands under pythoncode/<name>/ next to
+     the repo, not next to the source file.
 
 The program runs on a worker thread so the window stays responsive.
 "Stop" interrupts a program the next time it reads input or writes
@@ -32,6 +36,7 @@ from pli.parser import PLIParser, ParseError        # noqa: E402
 from pli.preproc import preprocess, PreprocError    # noqa: E402
 from pli.interpreter import (Interpreter, PLIError,           # noqa: E402
                              _BUILTINS, _NILADIC_BUILTINS)
+from pli.build import build as build_exe_file               # noqa: E402
 
 KEYWORDS = set(reserved) | {"RECURSIVE", "MAIN", "SET", "INTO", "FROM",
                             "KEY", "KEYTO", "KEYFROM", "TITLE", "INPUT",
@@ -131,6 +136,7 @@ class PLIIDE(tk.Tk):
         self.filename = None
         self.parser = PLIParser()          # built once, reused
         self.run_thread = None
+        self.build_thread = None
         self.stop_flag = threading.Event()
         self.out_queue = queue.Queue()
         self._build_ui()
@@ -181,6 +187,8 @@ class PLIIDE(tk.Tk):
         m_run.add_command(label="Run", command=self.run_program,
                           accelerator="F5")
         m_run.add_command(label="Stop", command=self.stop_program)
+        m_run.add_separator()
+        m_run.add_command(label="Build EXE...", command=self.build_exe)
         menu.add_cascade(label="Run", menu=m_run)
         self.config(menu=menu)
 
@@ -194,6 +202,8 @@ class PLIIDE(tk.Tk):
                    command=self.run_program).pack(side="left", padx=2)
         ttk.Button(bar, text="Stop",
                    command=self.stop_program).pack(side="left", padx=2)
+        ttk.Button(bar, text="Build EXE...",
+                   command=self.build_exe).pack(side="left", padx=(12, 2))
 
         # status bar FIRST, anchored to the bottom edge: widgets packed
         # earlier keep their space, so the bar can never be clipped away
@@ -667,6 +677,53 @@ class PLIIDE(tk.Tk):
         self.status.config(text="stop requested "
                            "(takes effect on next output or input)")
 
+    # ---- build standalone EXE ----------------------------------------------
+
+    def build_exe(self):
+        if self.build_thread and self.build_thread.is_alive():
+            messagebox.showinfo("PL/I IDE", "A build is already running - "
+                                "please wait for it to finish.")
+            return
+        if not self.compile_program(quiet=True):
+            messagebox.showerror("PL/I IDE", "Fix the compile errors "
+                                 "before building an EXE.")
+            self.notebook.select(self.errors)
+            return
+        if not self.filename:
+            self.save_file_as()
+            if not self.filename:
+                return
+        else:
+            self.save_file()
+        default_name = os.path.splitext(os.path.basename(self.filename))[0]
+        out_path = filedialog.asksaveasfilename(
+            title="Build standalone EXE",
+            initialdir=os.path.dirname(self.filename),
+            initialfile=default_name,
+            defaultextension=".exe" if os.name == "nt" else "",
+            filetypes=[("Executable", "*.exe")] if os.name == "nt"
+            else [("All files", "*")])
+        if not out_path:
+            return
+        out_dir, out_name = os.path.split(out_path)
+        if os.name == "nt" and out_name.lower().endswith(".exe"):
+            out_name = out_name[:-4]
+        output = os.path.join(out_dir, out_name)
+        source = self.filename
+
+        self.status.config(text="building EXE... (can take under a minute)")
+
+        def work():
+            try:
+                final_path = build_exe_file([source], output)
+                self.out_queue.put(("build_done", final_path))
+            except Exception as e:
+                self.out_queue.put(("build_err", "%s: %s"
+                                    % (type(e).__name__, e)))
+
+        self.build_thread = threading.Thread(target=work, daemon=True)
+        self.build_thread.start()
+
     # ---- live SYSIN console ------------------------------------------------
 
     def _set_console(self, waiting):
@@ -738,6 +795,15 @@ class PLIIDE(tk.Tk):
                     self._add_error(text)
                     self.notebook.select(self.errors)
                     self.status.config(text="runtime error")
+                elif kind == "build_done":
+                    self.status.config(text="build complete: %s" % text)
+                    messagebox.showinfo("PL/I IDE",
+                                        "Built standalone executable:\n%s"
+                                        % text)
+                elif kind == "build_err":
+                    self.status.config(text="build failed")
+                    messagebox.showerror("PL/I IDE", "Build failed:\n%s"
+                                         % text)
         except queue.Empty:
             pass
         self.after(50, self._poll_queue)
