@@ -5,8 +5,8 @@
   },
   "SAMPLE": {
     "driver": "ibm_db",
-    "url": "jdbc:db2://localhost:25000/sample",
-    "user": "maga1"
+    "url": "jdbc:db2://172.22.90.228:50000/SAMPLE",
+    "user": "db2inst1"
   },
   "DTT1": {
     "driver": "ibm_db",

@@ -5,19 +5,43 @@ F-compiler language level, using [PLY](https://www.dabeaz.com/ply/)
 (`ply.lex` / `ply.yacc`) for the lexer and LALR(1) grammar — plus a small
 stand-alone Tkinter IDE.
 
-## Requirements
+## Installation
 
-Python 3.10+ and:
+Skip Python entirely: download a self-contained CLI executable from
+the [Releases page](../../releases) (Windows and Linux, x64) — no
+interpreter, no `pip install`, just `pli program.pli`. Runs the
+sqlite `EXEC SQL` backend out of the box; Db2 (`ibm_db`) support needs
+the source install below.
 
-```
+**From source** — requires Python 3.10+.
+
+```bash
+git clone https://github.com/markons/pli-interpreter.git
+cd pli-interpreter
 pip install -r requirements.txt      # just ply
 ```
 
-Or skip Python entirely: download a self-contained CLI executable
-from the [Releases page](../../releases) (Windows and Linux, x64) —
-no interpreter, no `pip install`, just `pli program.pli`. Runs the
-sqlite `EXEC SQL` backend out of the box; Db2 (`ibm_db`) support needs
-the source install (see *Building standalone executables* below).
+Verify it works:
+
+```bash
+python -m pli pli/examples/hello.pli
+```
+
+On **Linux/macOS/WSL**, recent distros refuse `pip install` into the
+system Python (PEP 668, "externally-managed-environment"); use a venv:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+python3 -m pli pli/examples/hello.pli
+```
+
+On **WSL** specifically, clone into your Linux home directory (e.g.
+`~/pli`) rather than working under `/mnt/c/...` — a Windows drive
+mounted via `drvfs` can silently break the venv's `pip` launcher. See
+[WSL.md](WSL.md) for the full setup (including that workaround and
+building a native Linux binary with `scripts/build.py`).
 
 ## Usage
 
@@ -57,13 +81,22 @@ exercise the F-level features; the rest are basics.
 python pli_ide.py [program.pli]      # or double-click pli-ide.bat
 ```
 
+On Linux/WSL, Tk is a separate OS package (not pulled in by `pip`):
+if this fails with `ModuleNotFoundError: No module named 'tkinter'`,
+run `sudo apt install python3-tk` (Debian/Ubuntu) first. The
+interpreter itself (`python -m pli`, `scripts/build.py`) has no
+tkinter dependency.
+
 A stand-alone Tkinter IDE (stdlib only): editor with line numbers,
 PL/I syntax highlighting and find/replace (Ctrl+F, F3); **Compile**
 (F7) lists *all* syntax errors at once (panic-mode recovery) with
 click-to-jump line highlighting; **Run** (F5) executes on a worker
 thread with live SYSPRINT output, a pre-supplied SYSIN tab, and an
 interactive `SYSIN>` console for `GET` input (`/*` or the EOF button
-signals ENDFILE). The interpreter itself has no dependency on the IDE.
+signals ENDFILE); **Build EXE...** freezes the current program into a
+standalone executable via `pli-build` (see *Building standalone
+executables* below), prompting for a save location. The interpreter
+itself has no dependency on the IDE.
 
 ## Supported language
 
@@ -233,14 +266,24 @@ program, then the current directory, then `~`:
               "user": "svc-user", "securityMechanism": "11" } }
 ```
 
-Drivers: `sqlite` (stdlib — used by `examples/sqldemo.pli`, works
-offline) and `ibm_db` (`pip install ibm_db`; the `jdbc:db2://` URL is
+Drivers: `sqlite` (stdlib, works offline — see
+`examples/include_fetch_demo/` for a self-contained sqlite-backed
+demo) and `ibm_db` (`pip install ibm_db`; the `jdbc:db2://` URL is
 translated to a native DSN, and on Windows the bundled Db2 clidriver
 DLLs are put on the search path automatically).  A missing
 `"password"` key prompts at CONNECT — masked in the terminal for the
-CLI, a dialog in the IDE.  `examples/sqldemo_db2.pli` is the same demo
-against a real Db2; `examples/sqldemo_kerberos.pli` connects via
-Kerberos (optionally + SSL/JDBC, see below).
+CLI, a dialog in the IDE.  `examples/sqldemo_db2.pli` connects to the
+`SAMPLE` entry (password prompt); `examples/sqldemo_kerberos.pli`
+connects via Kerberos (optionally + SSL/JDBC, see below).
+
+**`examples/sqldemo.pli` connects to `AZDO0D1O`, a real internal
+ABS-schema Db2 instance over Kerberos+SSL** — it is *not* an offline
+demo. **Before running it (or any example against `AZDO0D1O`/`SAMPLE`),
+update the matching entry in your own `pli_dbc.json`** with a
+connection, user, and (for `SAMPLE`) password you actually have access
+to — the checked-in `pli_dbc.json` under `pli/examples/` is a real
+config for this environment, deliberately committed *without* a
+password (see the `"password"` note above), not a portable template.
 
 Kerberos (typical for Db2 LUW): set `"securityMechanism": "11"` on an
 `ibm_db` connection — no password field, no prompt; the DSN gets
@@ -267,6 +310,45 @@ Not implemented (yet): NULL indicator variables (fetching NULL sets
 positioned `UPDATE/DELETE ... WHERE CURRENT OF` (cursors are
 client-side), stored-procedure OUT parameters, scrollable cursors.
 SQL errors surface at run time via SQLCODE, not at compile time.
+
+### %INCLUDE fallback (DB2 source repository)
+
+`%INCLUDE name;` normally reads `name.pli` next to the source. If that
+file doesn't exist, and `pli_dbc.json` has an optional
+`"_source_repository"` block, the preprocessor falls back to fetching
+the member's source from a DB2 table instead — for legacy PL/I
+copybooks that live as CLOB rows in a mainframe-migrated source
+repository rather than as files on disk:
+
+```json
+{ "AZDO0D1O": { "driver": "ibm_db", "url": "jdbc:db2://..." },
+  "_source_repository": {
+    "connection": "AZDO0D1O",
+    "table": "ABS.CCM_SOURCE_REPO",
+    "name_column": "CCMOBJT",
+    "type_column": "CCMTYPT",
+    "source_column": "QUELLE",
+    "newline_char": "",
+    "cache_dir": ".pli_include_cache"
+  } }
+```
+
+`"connection"` reuses an existing entry in the same file (its driver,
+Kerberos, SSL and JDBC settings all apply). A fetched member is cached
+under `cache_dir` (default `.pli_include_cache`, relative to wherever
+`pli_dbc.json` was found) and never re-fetched once cached — the
+filesystem itself is the "already extracted" tracking, so repeated
+runs and diamond includes (a member pulled in by two different
+parents) just become ordinary local-file hits. Since a cached member
+is a real `.pli` file, any `%INCLUDE` inside *it* recurses through the
+normal local-file path automatically — no separate "recursive fetch"
+step is needed. A fetch failure (bad config, connection error, member
+not found in the table) always surfaces as a normal `PreprocError`,
+combined with the original "file not found" message, never a silent
+skip. `%INCLUDE` also now caps nesting at 20 levels, raising a clean
+error for a circular `%INCLUDE` instead of a raw `RecursionError`.
+`examples/include_fetch_demo/` is a self-contained, offline-runnable
+demo using the `sqlite` driver.
 
 **Operators & builtins** — full operator set incl. `¬`/`^`/`~` spellings
 and bit-string logic; ~75 builtins:
@@ -353,15 +435,37 @@ frozen binary bundles sqlite for `EXEC SQL` but not the Db2 driver
 (`ibm_db` pulls in a native client library with its own redistribution
 terms) — Db2 support needs the source install (`pip install ibm_db`).
 
-On Linux, a `.pli` file can also be marked directly executable:
+**`pli-build`** (`pli/build.py`, run via `bin/pli-build` / `pli-build.bat`
+or `python -m pli.build`) does the same two jobs as `scripts/build.py`
+above, but as a shipped, always-available tool rather than a dev-only
+script — it's also what the IDE's **Build EXE...** button (see *The
+IDE* below) calls:
+
+```
+bin/pli-build pli/examples/stage6.pli -o stage6      # bake one program in
+bin/pli-build --interpreter -o pli                   # generic frozen interpreter
+```
+
+Excludes the Db2 driver stack by default same as `scripts/build.py`
+(`--with-db2` opts back in). **Key difference:** `pli-build` bundles
+the raw `.pli` source file(s) via PyInstaller `--add-data` and runs the
+`%` preprocessor at run time inside the frozen exe, rather than
+expanding it once at build time — a program that `%INCLUDE`s a sibling
+member needs that member bundled alongside it (or fetched via the
+DB2 `%INCLUDE` fallback below) to work standalone, unlike a
+`scripts/build.py` binary which has `%INCLUDE` fully baked in.
+`bin/pli-build-selftest` checks both modes against `hello.pli`.
+
+On Linux, a `.pli` file can also be marked directly executable — see
+`pli/examples/shebang_demo.pli`:
 ```
 #!/usr/bin/env pli
-HELLO: PROC OPTIONS(MAIN);
-   PUT LIST('hi');
-END HELLO;
+SHEBANGDEMO: PROCEDURE OPTIONS(MAIN);
+   PUT LIST('shebang line was skipped, this still runs');
+END SHEBANGDEMO;
 ```
 ```
-chmod +x hello.pli && ./hello.pli
+chmod +x pli/examples/shebang_demo.pli && ./pli/examples/shebang_demo.pli
 ```
 
 ## Layout
@@ -383,4 +487,8 @@ chmod +x hello.pli && ./hello.pli
 | `bin/pli`, `bin/pli-ide` | Unix (Linux/macOS) launchers |
 | `scripts/build.py` | builds a standalone CLI executable (PyInstaller) |
 | `scripts/pli_cli_entry.py` | PyInstaller entry point for the CLI |
+| `pli/build.py` | `pli-build` tool: freeze a program (or the interpreter) via PyInstaller at run time |
+| `bin/pli-build`, `pli-build.bat` | launchers for `pli-build` |
+| `bin/pli-build-selftest` | checks `pli-build`'s two modes against `hello.pli` |
+| `pli/include_fetch.py` | `%INCLUDE` DB2 source-repository fallback fetch/cache |
 | `.github/workflows/release.yml` | CI: builds + releases Windows/Linux binaries per tag |

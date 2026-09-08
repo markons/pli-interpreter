@@ -14,9 +14,13 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   enforced via .gitattributes).
 - IDE: `python pli_ide.py [file.pli]` or `pli-ide.bat` / `bin/pli-ide`.
 - Regression: run every `pli/examples/*.pli` (skip `empdef.pli` — include
-  member). Stdin fixtures: average=`3 1 2 3`, stage1=`1 2`,
-  stage2=`X=1,Y=2;` + `AAAABBBB  111.25`. Delete `stage4_*.dat` and
-  `pli/examples/sqldemo.sqlite` afterwards.
+  member; also skip `sqldemo.pli`, which now needs a live internal
+  ABS Db2 connection, not offline). Stdin fixtures: hello=`World` (GET
+  LIST NAME), average=`3 1 2 3`, stage1=`1 2`, stage2=`X=1,Y=2;` +
+  `AAAABBBB  111.25`. Delete `stage4_*.dat` afterwards.
+  `pli/examples/include_fetch_demo/test_include_fetch.py` is a
+  self-contained scripted test (builds its own sqlite fixture, runs
+  itself, cleans up) — run standalone, not part of the plain-.pli sweep.
 - Grammar check after parser edits:
   `python -c "from pli.parser import PLIParser; PLIParser().build(write_tables=False)"`
   (must build with no conflicts; delete any `parser.out`).
@@ -56,6 +60,40 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   v0.7.0 — see below). DO REPEAT, REGIONAL(2/3), GENERIC: unsupported
   (BY NAME v0.5, REGIONAL(1) v0.6, cross-sections v0.5 — this line was
   stale, corrected 2026-07).
+- v0.9.0 additions: %INCLUDE DB2 source-repository fallback (ai4pli/
+  pli-tools-vscode's "recursive include resolver" concept, ported
+  narrowly — this preprocessor is already a real recursive-descent
+  process, so only the fetch-on-miss part was new; no BFS/queue/level-
+  tracking needed, unlike ai4pli's own regex-scanner-bolted-onto-a-
+  DB-extractor design). `preproc.py`'s `%INCLUDE` OSError branch now
+  calls `Preprocessor._fetch_include_fallback` (lazily probes
+  `pli_dbc.json` for an optional `"_source_repository"` block, cached
+  on `self._db_fallback_cfg`, `False` sentinel = checked/not
+  configured — zero behavior change when absent) before raising;
+  delegates to new `pli/include_fetch.py`
+  (`get_fallback_config`/`fetch_and_cache`/`IncludeFetchError`), which
+  checks a local cache dir first (never re-fetches; the cache file
+  being a real `.pli` file is what makes a fetched member's own nested
+  `%INCLUDE`s recurse through the ordinary local-file path with no new
+  logic), else queries `table WHERE name_column = ?` for one member at
+  a time and restores CLOB newlines via `newline_char`. Any fetch
+  failure raises `PreprocError` combining the original local-miss
+  reason with the fetch-failure reason — never a silent skip.
+  `sql.py`'s `SqlRuntime._connect` had its connection-building body
+  factored into a module-level `connect_raw(cfg, key, config_dir,
+  password_prompt)` (no `Interpreter`/`SqlRuntime` needed) so
+  `include_fetch.py` reuses the exact same driver/Kerberos/SSL/JDBC
+  logic (`_connect_jdbc_kerberos_ssl` etc.) with zero duplication;
+  `_connect` is now a thin wrapper. Bundled adjacent fix: `preproc.py`
+  had zero protection against circular `%INCLUDE` (crashed with a raw
+  `RecursionError`) — `Preprocessor._include_depth` + module constant
+  `_MAX_INCLUDE_DEPTH = 20` now raises a clean `PreprocError` instead;
+  purely local, no DB2 involved, verified with a plain `A→B→A` cycle.
+  `examples/include_fetch_demo/` demonstrates the whole path offline
+  via the `sqlite` driver (own `pli_dbc.json`, `build_fixture.py`
+  creates a `SOURCE_REPO` table mimicking DB2's CCMOBJT/CCMTYPT/QUELLE
+  columns, `test_include_fetch.py` proves both the fetch-and-cache run
+  and a cache-only run with the table emptied).
 - v0.7.0 additions (object-graph features; NOT byte-accurate storage
   — see roadmap note below, that's a separate, larger effort):
   REFER self-defining structures (bound tuple ("REFER",expr,name);

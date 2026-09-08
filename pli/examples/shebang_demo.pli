@@ -1,0 +1,4 @@
+#!/usr/bin/env pli
+SHEBANGDEMO: PROCEDURE OPTIONS(MAIN);
+   PUT LIST('shebang line was skipped, this still runs');
+END SHEBANGDEMO;

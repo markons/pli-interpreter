@@ -1,0 +1,15 @@
+{
+  "SRCREPO": {
+    "driver": "sqlite",
+    "url": "include_fetch_demo.sqlite"
+  },
+  "_source_repository": {
+    "connection": "SRCREPO",
+    "table": "SOURCE_REPO",
+    "name_column": "CCMOBJT",
+    "type_column": "CCMTYPT",
+    "source_column": "QUELLE",
+    "newline_char": "",
+    "cache_dir": ".pli_include_cache"
+  }
+}

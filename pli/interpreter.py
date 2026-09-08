@@ -1419,6 +1419,7 @@ class Interpreter:
         self._flush_line()
         self._write(text + "\n")
         if stmt.reply is not None:
+            self.stdout.flush()
             line = self.stdin.readline()
             if not line:
                 raise PLICondition("ENDFILE", "end of input on REPLY",
@@ -2268,6 +2269,7 @@ class Interpreter:
         import re
         text = ""
         while ";" not in text:
+            self.stdout.flush()
             line = self.stdin.readline()
             if not line:
                 raise PLICondition("ENDFILE", "end of file in GET DATA",
@@ -2318,6 +2320,7 @@ class Interpreter:
                     raise PLICondition("ERROR",
                                        "GET STRING: source string "
                                        "exhausted")
+                self.stdout.flush()
                 line = self.stdin.readline()
                 if not line:
                     raise PLICondition("ENDFILE",
@@ -2383,6 +2386,7 @@ class Interpreter:
         if self.string_input and not self.input_tokens:
             raise PLICondition("ERROR", "GET STRING: source string exhausted")
         while not self.input_tokens:
+            self.stdout.flush()
             line = self.stdin.readline()
             if not line:
                 raise PLICondition("ENDFILE", "end of input file on GET",

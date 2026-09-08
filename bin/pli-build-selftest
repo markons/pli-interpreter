@@ -1,0 +1,21 @@
+#!/bin/sh
+# Verifies pli-build's two modes produce binaries that behave like
+# `python -m pli`. Run from the repo root: bin/pli-build-selftest
+set -e
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$DIR"
+
+WANT="$(echo World | python -m pli pli/examples/hello.pli)"
+
+python -m pli.build pli/examples/hello.pli -o /tmp/pli-selftest-baked
+GOT_BAKED="$(echo World | /tmp/pli-selftest-baked)"
+[ "$GOT_BAKED" = "$WANT" ] || { echo "FAIL: baked binary output mismatch"; exit 1; }
+echo "OK: program-baked binary matches interpreter output"
+
+python -m pli.build --interpreter -o /tmp/pli-selftest-interp
+GOT_INTERP="$(echo World | /tmp/pli-selftest-interp pli/examples/hello.pli)"
+[ "$GOT_INTERP" = "$WANT" ] || { echo "FAIL: frozen interpreter output mismatch"; exit 1; }
+echo "OK: frozen interpreter matches interpreter output"
+
+rm -f /tmp/pli-selftest-baked /tmp/pli-selftest-interp
+echo "pli-build self-test passed"

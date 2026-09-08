@@ -219,6 +219,90 @@ def _connect_jdbc_kerberos_ssl(cfg, host, port, database, user):
                               driver_args, jars)
 
 
+def _resolve_password(cfg, name, password_prompt):
+    pwd = cfg.get("password")
+    if pwd is None:
+        return password_prompt("Password for connection %s: " % name)
+    if isinstance(pwd, str) and pwd.startswith("env:"):
+        return os.environ.get(pwd[4:], "")
+    return pwd
+
+
+def connect_raw(cfg, name, config_dir, password_prompt):
+    """Build a raw (conn, driver) tuple from a pli_dbc.json connection
+    entry -- no SqlRuntime/Interpreter needed, so callers like
+    pli/include_fetch.py (which run at preprocess time, sometimes with
+    no Interpreter in scope at all) can reuse the same driver/Kerberos/
+    SSL/JDBC logic as EXEC SQL CONNECT."""
+    driver = cfg.get("driver", "ibm_db").lower()
+    url = cfg.get("url", "")
+    if driver == "sqlite":
+        import sqlite3
+        path = url
+        if path != ":memory:" and not os.path.isabs(path):
+            path = os.path.join(config_dir, path)
+        return sqlite3.connect(path), driver
+    if driver == "ibm_db":
+        p = parse_jdbc_db2(url) if url.lower().startswith("jdbc:") \
+            else {"host": cfg.get("host", "localhost"),
+                  "port": cfg.get("port", 50000),
+                  "database": cfg.get("database", url)}
+        user = cfg.get("user", "")
+        is_kerberos = str(cfg.get("securityMechanism", "")) == "11"
+        if is_kerberos and cfg.get("ssl"):
+            # Kerberos + SSL together needs a JVM: ibm_db's native CLI
+            # driver has no GSKit keystore for SSL (many Db2 LUW hosts,
+            # e.g. port 50200, mandate both at once).
+            conn = _connect_jdbc_kerberos_ssl(cfg, p["host"], p["port"],
+                                              p["database"], user)
+            return conn, driver
+        try:
+            import ibm_db_dbi
+        except ImportError as first_err:
+            # Windows: the bundled Db2 clidriver DLLs are often not
+            # on the DLL search path; register them and retry
+            added = False
+            try:
+                import site
+                dirs = list(site.getsitepackages())
+                dirs.append(site.getusersitepackages())
+            except Exception:
+                dirs = []
+            for sp in dirs:
+                bindir = os.path.join(sp, "clidriver", "bin")
+                if os.path.isdir(bindir) and hasattr(
+                        os, "add_dll_directory"):
+                    os.add_dll_directory(bindir)
+                    os.environ["PATH"] = (bindir + os.pathsep +
+                                          os.environ.get("PATH", ""))
+                    added = True
+            if not added:
+                raise SQLError("driver ibm_db not installed "
+                               "(pip install ibm_db): %s" % first_err)
+            try:
+                import ibm_db_dbi
+            except ImportError as e:
+                raise SQLError("ibm_db is installed but its Db2 "
+                               "client DLLs failed to load: %s" % e)
+        dsn = ("DATABASE=%s;HOSTNAME=%s;PORT=%d;PROTOCOL=TCPIP;"
+               "UID=%s;" % (p["database"], p["host"], p["port"], user))
+        if is_kerberos:
+            # Kerberos, no SSL: no password sent, Windows SSPI/
+            # kinit ticket cache handles the handshake.
+            dsn += "AUTHENTICATION=KERBEROS;"
+        else:
+            dsn += "PWD=%s;" % _resolve_password(cfg, name, password_prompt)
+        if cfg.get("ssl"):
+            # SSL without Kerberos: ibm_db CAN do this via a
+            # fetched leaf cert (no JKS truststore support, but a
+            # PEM path works).
+            dsn += "Security=SSL;"
+            cert_path = get_server_ssl_cert_pem(p["host"], p["port"])
+            dsn += "SSLServerCertificate=%s;" % cert_path
+        return ibm_db_dbi.connect(dsn, "", ""), driver
+    raise SQLError("unknown driver %r (supported: sqlite, ibm_db)" % driver)
+
+
 class Cursor:
     def __init__(self, select_text):
         self.select_text = select_text
@@ -263,89 +347,10 @@ class SqlRuntime:
         if key is None:
             raise SQLError("connection %r not in pli_dbc.json" % name)
         cfg = self.config[key]
-        driver = cfg.get("driver", "ibm_db").lower()
-        url = cfg.get("url", "")
-        if driver == "sqlite":
-            import sqlite3
-            path = url
-            if path != ":memory:" and not os.path.isabs(path):
-                path = os.path.join(self.config_dir, path)
-            conn = sqlite3.connect(path)
-        elif driver == "ibm_db":
-            p = parse_jdbc_db2(url) if url.lower().startswith("jdbc:") \
-                else {"host": cfg.get("host", "localhost"),
-                      "port": cfg.get("port", 50000),
-                      "database": cfg.get("database", url)}
-            user = cfg.get("user", "")
-            is_kerberos = str(cfg.get("securityMechanism", "")) == "11"
-            if is_kerberos and cfg.get("ssl"):
-                # Kerberos + SSL together needs a JVM: ibm_db's native CLI
-                # driver has no GSKit keystore for SSL (many Db2 LUW hosts,
-                # e.g. port 50200, mandate both at once).
-                conn = _connect_jdbc_kerberos_ssl(cfg, p["host"], p["port"],
-                                                  p["database"], user)
-            else:
-                try:
-                    import ibm_db_dbi
-                except ImportError as first_err:
-                    # Windows: the bundled Db2 clidriver DLLs are often not
-                    # on the DLL search path; register them and retry
-                    added = False
-                    try:
-                        import site
-                        dirs = list(site.getsitepackages())
-                        dirs.append(site.getusersitepackages())
-                    except Exception:
-                        dirs = []
-                    for sp in dirs:
-                        bindir = os.path.join(sp, "clidriver", "bin")
-                        if os.path.isdir(bindir) and hasattr(
-                                os, "add_dll_directory"):
-                            os.add_dll_directory(bindir)
-                            os.environ["PATH"] = (bindir + os.pathsep +
-                                                  os.environ.get("PATH", ""))
-                            added = True
-                    if not added:
-                        raise SQLError("driver ibm_db not installed "
-                                       "(pip install ibm_db): %s"
-                                       % first_err)
-                    try:
-                        import ibm_db_dbi
-                    except ImportError as e:
-                        raise SQLError("ibm_db is installed but its Db2 "
-                                       "client DLLs failed to load: %s" % e)
-                dsn = ("DATABASE=%s;HOSTNAME=%s;PORT=%d;PROTOCOL=TCPIP;"
-                       "UID=%s;" % (p["database"], p["host"], p["port"],
-                                    user))
-                if is_kerberos:
-                    # Kerberos, no SSL: no password sent, Windows SSPI/
-                    # kinit ticket cache handles the handshake.
-                    dsn += "AUTHENTICATION=KERBEROS;"
-                else:
-                    dsn += "PWD=%s;" % self._password(cfg, key)
-                if cfg.get("ssl"):
-                    # SSL without Kerberos: ibm_db CAN do this via a
-                    # fetched leaf cert (no JKS truststore support, but a
-                    # PEM path works).
-                    dsn += "Security=SSL;"
-                    cert_path = get_server_ssl_cert_pem(p["host"],
-                                                        p["port"])
-                    dsn += "SSLServerCertificate=%s;" % cert_path
-                conn = ibm_db_dbi.connect(dsn, "", "")
-        else:
-            raise SQLError("unknown driver %r (supported: sqlite, ibm_db)"
-                           % driver)
+        conn, driver = connect_raw(cfg, key, self.config_dir,
+                                   self.interp.password_prompt)
         self.connections[key.upper()] = (conn, driver)
         self.current = (key.upper(), conn, driver)
-
-    def _password(self, cfg, name):
-        pwd = cfg.get("password")
-        if pwd is None:
-            return self.interp.password_prompt(
-                "Password for connection %s: " % name)
-        if isinstance(pwd, str) and pwd.startswith("env:"):
-            return os.environ.get(pwd[4:], "")
-        return pwd
 
     def _need_conn(self):
         if self.current is None:
