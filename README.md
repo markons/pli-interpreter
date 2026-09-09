@@ -58,6 +58,12 @@ python3 -m pip install -r requirements.txt
 python3 -m pli pli/examples/hello.pli
 ```
 
+On Debian/Ubuntu (including WSL), `sudo apt install python3-ply` works
+too and skips the venv entirely — fine for just running the
+interpreter, though it ties you to whatever `ply` version Ubuntu
+packages, and won't cover the *optional* extras below, which still
+need `pip`.
+
 On **WSL** specifically, clone into your Linux home directory (e.g.
 `~/pli`) rather than working under `/mnt/c/...` — a Windows drive
 mounted via `drvfs` can silently break the venv's `pip` launcher. See
