@@ -101,6 +101,31 @@ Several files as one separately-compiled program (external procedures,
 python -m pli main.pli sub1.pli sub2.pli
 ```
 
+### Runtime PARM
+
+A main procedure may declare one optional `CHAR VARYING` parameter to
+receive a runtime parameter string, mirroring the mainframe convention
+of `PARM=` on the JCL `EXEC` card:
+
+```
+MAIN: PROC(PARMSTR) OPTIONS(MAIN);
+   DECLARE PARMSTR CHAR(100) VARYING;
+   ...
+END MAIN;
+```
+
+Supply it on the command line with `--parm` (it can appear anywhere
+in `argv`, before or after the source file list, and works unchanged
+through `pli.bat`/`bin/pli`):
+
+```
+python -m pli main.pli --parm 'ABC 123'
+```
+
+If `OPTIONS(MAIN)` declares no parameter, `--parm` is simply not
+needed. Declaring more than one parameter on the main procedure is an
+error. See `pli/examples/parmdemo.pli`.
+
 Programmatic API:
 
 ```python
@@ -129,7 +154,10 @@ A stand-alone Tkinter IDE (stdlib only): editor with line numbers,
 PL/I syntax highlighting and find/replace (Ctrl+F, F3); **Compile**
 (F7) lists *all* syntax errors at once (panic-mode recovery) with
 click-to-jump line highlighting; **Run** (F5) executes on a worker
-thread with live SYSPRINT output, a pre-supplied SYSIN tab, and an
+thread with live SYSPRINT output, a pre-supplied SYSIN tab, a
+"Parameter (PARM)" tab holding the runtime PARM string for a main
+procedure declared `PROC(parmvar) OPTIONS(MAIN)` (the GUI equivalent
+of the CLI's `--parm`, see *Runtime PARM* above), and an
 interactive `SYSIN>` console for `GET` input (`/*` or the EOF button
 signals ENDFILE); **Build EXE...** freezes the current program into a
 standalone executable via `pli-build` (see *Building standalone
@@ -140,7 +168,10 @@ itself has no dependency on the IDE.
 
 **Program structure** — main procedure with `OPTIONS(MAIN)`, nested
 procedures (recursive, parameters, `RETURNS`), `BEGIN` blocks, labels,
-condition prefixes `(SIZE):`.
+condition prefixes `(SIZE):`. The main procedure may declare one
+optional `CHAR VARYING` parameter to receive the runtime PARM string
+(mainframe JCL convention): `MAIN: PROC(PARMSTR) OPTIONS(MAIN);` —
+see *Runtime PARM* below.
 
 **Data** — `FIXED`/`FLOAT` `BINARY`/`DECIMAL` with precision `(p,q)`,
 `CHAR(n)` (padded) and `VARYING`, `BIT(n)`, `PICTURE`/`PIC` (numeric

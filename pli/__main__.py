@@ -1,7 +1,11 @@
-"""Command-line entry point:  python -m pli main.pli [sub.pli ...]
+"""Command-line entry point:  python -m pli main.pli [sub.pli ...] [--parm STRING]
 
 Several files are treated as separately compiled external procedures
 linked into one program (the one with OPTIONS(MAIN) is the entry).
+
+--parm STRING supplies the runtime parameter for a main procedure
+declared  <label> : PROC(parmvar) OPTIONS(MAIN);  -- the mainframe
+JCL PARM= convention; parmvar receives STRING as a CHAR VARYING value.
 """
 import os
 import sys
@@ -12,11 +16,20 @@ from .lexer import LexError
 
 
 def main(argv):
+    argv = list(argv)
+    parm = ""
+    if "--parm" in argv:
+        i = argv.index("--parm")
+        if i + 1 >= len(argv):
+            print("--parm requires a value", file=sys.stderr)
+            return 2
+        parm = argv[i + 1]
+        del argv[i:i + 2]
     if len(argv) < 1:
         prog = os.path.basename(sys.argv[0]) or "pli"
         if prog in ("__main__.py", "-c"):
             prog = "python -m pli"
-        print("usage: %s <program.pli> [more.pli ...]" % prog,
+        print("usage: %s <program.pli> [more.pli ...] [--parm STRING]" % prog,
               file=sys.stderr)
         return 2
     try:
@@ -27,7 +40,7 @@ def main(argv):
     except (AttributeError, OSError, ValueError):
         pass
     try:
-        run_files(argv)
+        run_files(argv, parm=parm)
     except (PLIError, ParseError, LexError) as e:
         print("PL/I error: %s" % e, file=sys.stderr)
         return 1

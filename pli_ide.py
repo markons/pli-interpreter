@@ -11,7 +11,10 @@ Three functions:
      "Input (SYSIN, pre-supplied)" tab; after that the SYSIN> console
      under the output pane activates and the program waits for you to
      type a line (Enter/Send).  A line of "/*" or the EOF button
-     signals end-of-file (raises the ENDFILE condition).
+     signals end-of-file (raises the ENDFILE condition).  The
+     "Parameter (PARM)" tab supplies the runtime PARM string for a main
+     procedure declared <label>: PROC(parmvar) OPTIONS(MAIN); (mirrors
+     JCL's PARM= on the EXEC card; the CLI equivalent is --parm).
   4. Build EXE... (Run menu) - freezes the current file into a
      standalone executable via pli.build (PyInstaller). The generated
      PyInstaller entry script lands under pythoncode/<name>/ next to
@@ -291,6 +294,18 @@ class PLIIDE(tk.Tk):
 
         self.sysin = tk.Text(nb, font=FONT, height=6)
         nb.add(self.sysin, text="Input (SYSIN, pre-supplied)")
+
+        # Parameter tab: the runtime PARM string for a main procedure
+        # declared  <label> : PROC(parmvar) OPTIONS(MAIN);  (mirrors JCL's
+        # PARM= on the EXEC card; parmvar receives it as CHAR VARYING).
+        parmframe = ttk.Frame(nb)
+        ttk.Label(parmframe, text="PARM string passed to the main "
+                 "procedure's optional CHAR VARYING parameter:").pack(
+            anchor="w", padx=4, pady=(6, 2))
+        self.parm_entry = ttk.Entry(parmframe, font=FONT)
+        self.parm_entry.pack(fill="x", padx=4, pady=2)
+        nb.add(parmframe, text="Parameter (PARM)")
+
         self.notebook = nb
         self.reader = None
         self._waiting_input = False
@@ -653,9 +668,11 @@ class PLIIDE(tk.Tk):
         self.reader = sysin
         writer = GuiWriter(self.out_queue, self.stop_flag)
 
+        parm = self.parm_entry.get()
+
         def work():
             try:
-                interp = Interpreter(stdin=sysin, stdout=writer)
+                interp = Interpreter(stdin=sysin, stdout=writer, parm=parm)
                 interp.parser = self.parser        # reuse built grammar
                 interp.password_prompt = self._ask_password
                 interp.run(source, incdir)

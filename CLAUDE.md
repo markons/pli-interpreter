@@ -12,6 +12,13 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
 - Run a program: `python -m pli pli\examples\hello.pli` (from repo root);
   Windows: `pli.bat`, Unix: `bin/pli` (`bin/` scripts are LF + exec bit,
   enforced via .gitattributes).
+- Runtime PARM (mainframe JCL PARM= convention): a main procedure
+  declared `<label>: PROC(parmvar) OPTIONS(MAIN);` (parmvar a CHAR
+  VARYING) receives the runtime parameter string via
+  `python -m pli program.pli --parm 'STRING'` (`--parm` can appear
+  anywhere in argv, before or after the file list; works through
+  `pli.bat`/`bin/pli` unchanged since they just forward `%*`/`"$@"`).
+  See `pli/examples/parmdemo.pli`. No `--parm` ⇒ parmvar receives ''.
 - IDE: `python pli_ide.py [file.pli]` or `pli-ide.bat` / `bin/pli-ide`.
 - Regression: run every `pli/examples/*.pli` (skip `empdef.pli` — include
   member; skip `sqldemo_db2.pli` and `sqldemo.pli` — both need a real
@@ -49,6 +56,17 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   by-reference when plain var/array/structure/member ref, else dummy.
   `global_env` holds SQLCODE etc. Implicit declare: I–N ⇒ FIXED else
   FLOAT (PL/I rule — undeclared vars are legal, not an error).
+  `Interpreter.parm` (default `""`) is the runtime PARM string;
+  `run_multi` builds the main procedure's arg list from it: 0 params on
+  OPTIONS(MAIN) ⇒ called with no args (unchanged behavior), exactly 1 ⇒
+  called with a dummy `Variable(self.parm, Decl("CHAR", len, varying=
+  True))` cell (same shape `_arg_cell` already builds for a literal
+  CHAR argument — the parameter's own DCL in the body then just retypes
+  the shared box per existing param-redeclare rules), >1 ⇒ PLIError
+  (OPTIONS(MAIN) takes at most the one PARM parameter). `run_files`/
+  `run_file`/`Interpreter.__init__` all take `parm=""`; `pli/__main__.py`
+  pulls `--parm STRING` out of argv anywhere in the list; the IDE has a
+  "Parameter (PARM)" notebook tab feeding `Interpreter(parm=...)`.
 - `fixeddec.py` exact FIXED DECIMAL(p,q), N=15, PL/I F result-precision
   rules; int/int division deliberately NOT scale-preserving (documented
   deviation). Has __round__/__trunc__/__complex__ — needed by picture/
@@ -651,6 +669,10 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   pli.lexer.reserved and pli.interpreter._BUILTINS — stays in sync
   automatically. Compile lists ALL errors, red-tags lines, double-click
   jumps. Find/replace Ctrl+F, F3. `--selftest` opens+closes for CI.
+- "Parameter (PARM)" notebook tab (next to "Input (SYSIN, pre-
+  supplied)"): one Entry widget holding the runtime PARM string, read
+  in `run_program` and passed as `Interpreter(..., parm=...)` — the
+  GUI equivalent of the CLI's `--parm`.
 
 ## Windows gotchas (learned the hard way)
 - PowerShell pipes prepend UTF-8 BOM; stdin decoded as legacy codepage.

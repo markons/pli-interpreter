@@ -300,6 +300,13 @@ class JavaCodeGen:
                 raise CodegenError(
                     "multiple top-level procedures and none has "
                     "OPTIONS(MAIN); add OPTIONS(MAIN) to the entry point")
+        main_proc = next(proc for name, proc in top_procs if name == main_name)
+        if main_proc.params:
+            raise CodegenError(
+                "line %d: %s: OPTIONS(MAIN) with a runtime PARM parameter "
+                "is not supported by the Java backend (main() is emitted "
+                "with no arguments) -- drop the parameter" %
+                (main_proc.lineno, main_name))
 
         self.ret_kinds = {}
         for name, proc in top_procs:

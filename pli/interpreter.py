@@ -714,9 +714,11 @@ LIST_TABS = 24  # PUT LIST tab stop interval (columns 1, 25, 49, ...)
 # ---- the interpreter -----------------------------------------------------------
 
 class Interpreter:
-    def __init__(self, stdin=None, stdout=None):
+    def __init__(self, stdin=None, stdout=None, parm=""):
         self.stdin = stdin or sys.stdin
         self.stdout = stdout or sys.stdout
+        self.parm = parm         # runtime PARM string for OPTIONS(MAIN)'s
+                                  # optional CHAR VARYING parameter
         self.column = 0          # current output column (0-based)
         self.input_tokens = []   # pending GET LIST tokens
         self.parser = PLIParser()
@@ -779,8 +781,22 @@ class Interpreter:
                 raise PLIError("only procedure definitions allowed at top level")
         if main is None:
             raise PLIError("no procedure found")
+        main_params = main.params if main.params is not None else main.node.params
+        if len(main_params) == 0:
+            main_args = []
+        elif len(main_params) == 1:
+            # mainframe convention: <label>: PROC(parmvar) OPTIONS(MAIN);
+            # -- parmvar receives the runtime PARM string, declared CHAR
+            # VARYING in the body (JCL's PARM=, here --parm / the IDE's
+            # Parameter tab).
+            main_args = [Variable(self.parm, Decl("CHAR", len(self.parm),
+                                                  varying=True))]
+        else:
+            raise PLIError("%s: OPTIONS(MAIN) allows at most one parameter "
+                           "(the runtime PARM string), got %d"
+                           % (main.name, len(main_params)))
         try:
-            self.call_procedure(main, [])
+            self.call_procedure(main, main_args)
         except StopSignal:
             pass
         except PLICondition as c:
@@ -3598,15 +3614,15 @@ def run_source(source, stdin=None, stdout=None, include_dir="."):
     Interpreter(stdin=stdin, stdout=stdout).run(source, include_dir)
 
 
-def run_file(path, stdin=None, stdout=None):
-    run_files([path], stdin=stdin, stdout=stdout)
+def run_file(path, stdin=None, stdout=None, parm=""):
+    run_files([path], stdin=stdin, stdout=stdout, parm=parm)
 
 
-def run_files(paths, stdin=None, stdout=None):
+def run_files(paths, stdin=None, stdout=None, parm=""):
     """Separate compilation: several source files form one program."""
     sources = []
     for path in paths:
         with open(path, "r", encoding="utf-8-sig") as f:  # tolerate BOM
             sources.append((f.read(),
                             os.path.dirname(os.path.abspath(path))))
-    Interpreter(stdin=stdin, stdout=stdout).run_multi(sources)
+    Interpreter(stdin=stdin, stdout=stdout, parm=parm).run_multi(sources)
