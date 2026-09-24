@@ -494,7 +494,9 @@ and bit-string logic; ~75 builtins:
 - *conditions/tasking/system*: `ONCODE ONCHAR ONSOURCE COMPLETION
   STATUS DATE TIME DATETIME`
 
-plus pseudo-variables `SUBSTR` and `UNSPEC`.
+plus pseudo-variables `SUBSTR` and `UNSPEC`. `DCL x BUILTIN;` is honored:
+it marks `x` as a reference to the builtin function (not an implicitly
+declared variable) for the rest of that scope.
 
 ## Known deviations from PL/I(F)
 

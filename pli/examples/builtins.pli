@@ -35,4 +35,10 @@ BF: PROC OPTIONS(MAIN);
    PUT SKIP LIST('DATETIME len      =', LENGTH(DATETIME));
    IF RANDOM(42) >= 0 & RANDOM < 1 THEN
       PUT SKIP LIST('RANDOM in [0,1)   = OK');
+
+   /* DCL x BUILTIN: explicit builtin declare, un-shadows a name that
+      would otherwise resolve as an ordinary (implicitly declared)
+      variable */
+   DCL SQRT BUILTIN;
+   PUT SKIP LIST('SQRT(2) via DCL BUILTIN =', SQRT(2));
 END BF;

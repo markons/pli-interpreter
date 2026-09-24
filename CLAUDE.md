@@ -84,6 +84,29 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   v0.7.0 — see below). DO REPEAT, REGIONAL(2/3), GENERIC: unsupported
   (BY NAME v0.5, REGIONAL(1) v0.6, cross-sections v0.5 — this line was
   stale, corrected 2026-07).
+- REAL BUG fixed 2026-09-24: `DCL x BUILTIN;` (explicit builtin-function
+  declare — real PL/I syntax used to un-shadow a builtin name) parsed
+  fine (`BUILTIN` was already in `KNOWN_ATTRIBUTES`) but `_resolve_attrs`
+  treated it as a no-op attribute, so `_declare_one` fell through to an
+  ordinary implicitly-declared (FLOAT, since the name isn't I–N) plain
+  `Variable`. That variable then shadowed the real builtin at call time:
+  `eval_Ref` found the Variable first and, seeing call-args attached to a
+  plain scalar, raised `"%s is not an array/function"` — e.g. `DCL
+  LENGTH BUILTIN; ... LENGTH(PARAM)` failed outright. Fixed with a new
+  `BuiltinDecl(name)` marker class: `_declare_one` now special-cases the
+  `GENERIC`/`BUILTIN` attribute BEFORE the normal variable path,
+  validates the name against `_BUILTINS`/`_NILADIC_BUILTINS` (clear
+  `PLIError` if not a real builtin), and declares the marker instead of
+  a Variable; `eval_Ref` routes a `BuiltinDecl` straight to
+  `call_builtin` (checked ahead of the `entry is None` branch, right
+  after the existing `Procedure`/`LabelConst` checks). Assigning to a
+  `BUILTIN`-declared name falls through `assign_ref`/`_assign_entry`'s
+  existing dispatch (no isinstance match) to the pre-existing generic
+  `"cannot assign to %s"` fallback — already correct, no new code
+  needed there. Demonstrated in `pli/examples/builtins.pli` (`DCL SQRT
+  BUILTIN;`). The Java backend (`javagen.py`) already raised a clear
+  `CodegenError` for the `BUILTIN` attribute (its generic
+  unsupported-attribute path) — left as-is, no gap there.
 - v0.9.0 additions: %INCLUDE DB2 source-repository fallback (ai4pli/
   pli-tools-vscode's "recursive include resolver" concept, ported
   narrowly — this preprocessor is already a real recursive-descent

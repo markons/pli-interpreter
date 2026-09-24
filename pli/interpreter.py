@@ -108,6 +108,13 @@ class LabelConst:
         self.name = name
 
 
+class BuiltinDecl:
+    """DCL x BUILTIN; marker: hides any same-named outer variable in this
+    scope and routes x(...)/x to call_builtin instead."""
+    def __init__(self, name):
+        self.name = name
+
+
 class PLIStructure:
     """A structure: ordered members (Variable / PLIArray / PLIStructure)."""
     def __init__(self, name):
@@ -1016,6 +1023,12 @@ class Interpreter:
 
     def _declare_one(self, name, item, env):
         kinds = {k for k, _ in item.attrs}
+        if any(k == "GENERIC" and v[0] == "BUILTIN" for k, v in item.attrs):
+            if name not in _BUILTINS and name not in _NILADIC_BUILTINS:
+                raise PLIError("line %d: %s is not a builtin"
+                               % (item.lineno, name))
+            env.declare(name, BuiltinDecl(name))
+            return
         if "ENTRY" in kinds or "ENTRY_RETURNS" in kinds:
             existing = env.lookup(name)
             if isinstance(existing, Procedure):
@@ -2483,6 +2496,8 @@ class Interpreter:
             return result
         if isinstance(entry, LabelConst):
             return LabelValue(entry.name)
+        if isinstance(entry, BuiltinDecl):
+            return self.call_builtin(node, env)
         if entry is None:
             entry = self._search_member(node.name, env)
         if entry is None:
