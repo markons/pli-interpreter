@@ -447,17 +447,27 @@ copybooks that live as CLOB rows in a mainframe-migrated source
 repository rather than as files on disk:
 
 ```json
-{ "AZDO0D1O": { "driver": "ibm_db", "url": "jdbc:db2://..." },
+{ "DTO1": { "driver": "ibm_db", "url": "jdbc:db2://..." },
   "_source_repository": {
-    "connection": "AZDO0D1O",
-    "table": "ABS.CCM_SOURCE_REPO",
+    "connection": "DTO1",
+    "table": "G##OSTC.VGCC37B1",
     "name_column": "CCMOBJT",
     "type_column": "CCMTYPT",
     "source_column": "QUELLE",
-    "newline_char": "",
     "cache_dir": ".pli_include_cache"
   } }
 ```
+
+`name_column`/`type_column`/`source_column`/`newline_char` all default
+to the values shown above (`CCMOBJT`/`CCMTYPT`/`QUELLE`/U+009F, the
+EBCDIC line-separator artifact CCM stores inside the CLOB) if omitted,
+so only `connection` is actually required. `table` is also optional —
+the CCM object-store table is named differently depending on the DB2
+platform (mainframe host DB2 uses `G##OSTC.VGCC37B1`; Linux/MFES DB2
+uses `ABS.TCCMOBJ`); if `table` is omitted, it's auto-detected by
+probing `SYSIBM.SYSTABLES` for whichever one actually exists on the
+given connection, rather than risking a hardcoded value that's wrong
+for that particular environment.
 
 `"connection"` reuses an existing entry in the same file (its driver,
 Kerberos, SSL and JDBC settings all apply). A fetched member is cached

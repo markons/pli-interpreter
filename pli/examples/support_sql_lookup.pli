@@ -1,0 +1,17 @@
+/* REXX-style everyday support utility: ad-hoc data lookup via
+   EXEC SQL against a local sqlite file (the "TICKETS" connection in
+   pli_dbc.json) -- no live Db2 needed to prototype the query logic.
+   Swap that connection entry for a real "ibm_db" one later; the
+   EXEC SQL statements below don't change. */
+T: PROC OPTIONS(MAIN);
+   DCL CTR FIXED BIN;
+   EXEC SQL INCLUDE SQLCA;
+   EXEC SQL CONNECT TO TICKETS;
+   EXEC SQL CREATE TABLE TICKETS (ID CHAR(8), STATUS CHAR(10), OWNER CHAR(10));
+   EXEC SQL INSERT INTO TICKETS VALUES ('INC0001', 'OPEN', 'MARKON');
+   EXEC SQL INSERT INTO TICKETS VALUES ('INC0002', 'CLOSED', 'MARKON');
+   EXEC SQL INSERT INTO TICKETS VALUES ('INC0003', 'OPEN', 'HOPPER');
+
+   EXEC SQL SELECT COUNT(*) INTO :ctr FROM TICKETS WHERE STATUS = 'OPEN';
+   PUT SKIP LIST('open tickets:', ctr);
+END T;

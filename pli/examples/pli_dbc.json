@@ -3,14 +3,18 @@
     "driver": "sqlite",
     "url": "sqldemo.sqlite"
   },
+  "TICKETS": {
+    "driver": "sqlite",
+    "url": "support_tickets_demo.sqlite"
+  },
   "SAMPLE": {
     "driver": "ibm_db",
     "url": "jdbc:db2://172.22.90.228:50000/SAMPLE",
     "user": "db2inst1"
   },
-  "DTT1": {
+  "DTO1": {
     "driver": "ibm_db",
-    "url": "jdbc:db2://adt0.muc.allianz:6030/DTT1",
+    "url": "jdbc:db2://adt0.muc.allianz:6010/DTO1",
     "user": "if7xm6f"
   },
   "AZDO0D1O": {
@@ -21,5 +25,13 @@
     "ssl": true,
     "realm": "ALLIANZDE.ROOTDOM.NET",
     "kerberosServerPrincipal": "db2agl1/azdo0d1o.abs.azd.srv.allianz@DEV.ABS.AZD.SRV.ALLIANZ"
+  },
+  "_source_repository": {
+    "connection": "DTO1",
+    "table": "G##OSTC.VGCC37B1",
+    "name_column": "CCMOBJT",
+    "type_column": "CCMTYPT",
+    "source_column": "QUELLE",
+    "cache_dir": ".pli_include_cache"
   }
 }

@@ -1,0 +1,28 @@
+/* REXX-style everyday support utility: scan a log for a pattern,
+   like a small grep. RECORD file + READ INTO a plain CHAR VARYING
+   reads one physical line at a time (STREAM/GET EDIT would instead
+   read a fixed character count and can silently span line breaks). */
+GREPDEMO: PROC OPTIONS(MAIN);
+   DCL F FILE RECORD INPUT;
+   DCL LINE CHAR(100) VARYING;
+   DCL DONE BIT(1);
+   DCL NEEDLE CHAR(5) VARYING;
+   DCL LINENO FIXED BIN INIT(0);
+   DCL HITS   FIXED BIN INIT(0);
+
+   NEEDLE = 'ABEND';
+   DONE = '0'B;
+   ON ENDFILE(F) DONE = '1'B;
+   OPEN FILE(F) TITLE('pli/examples/support_joblog.txt');
+   DO WHILE(^DONE);
+      READ FILE(F) INTO(LINE);
+      IF DONE THEN LEAVE;
+      LINENO = LINENO + 1;
+      IF INDEX(LINE, NEEDLE) > 0 THEN DO;
+         HITS = HITS + 1;
+         PUT SKIP LIST(LINENO, ':', LINE);
+      END;
+   END;
+   CLOSE FILE(F);
+   PUT SKIP(2) LIST('matches for', NEEDLE, ':', HITS);
+END GREPDEMO;

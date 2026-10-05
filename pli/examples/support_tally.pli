@@ -1,0 +1,18 @@
+/* REXX-style everyday support utility: quick tally/report over a
+   list of return codes. HBOUND(array,dim) keeps the loop limit tied
+   to the array's actual size. */
+TALLYDEMO: PROC OPTIONS(MAIN);
+   DCL RC(6) FIXED BIN INIT(0, 4, 0, 8, 0, 12);
+   DCL I FIXED BIN;
+   DCL OK FIXED BIN INIT(0);
+   DCL BAD FIXED BIN INIT(0);
+
+   DO I = 1 TO HBOUND(RC, 1);
+      IF RC(I) = 0 THEN OK  = OK  + 1;
+      ELSE               BAD = BAD + 1;
+   END;
+
+   PUT SKIP LIST('jobs checked:', HBOUND(RC, 1));
+   PUT SKIP LIST('  RC=0 :', OK);
+   PUT SKIP LIST('  RC<>0:', BAD);
+END TALLYDEMO;

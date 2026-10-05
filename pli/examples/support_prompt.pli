@@ -1,0 +1,7 @@
+/* REXX-style everyday support utility: interactive prompt, the
+   DISPLAY/REPLY equivalent of REXX's SAY/PULL. */
+PROMPTDEMO: PROC OPTIONS(MAIN);
+   DCL DSN CHAR(44) VARYING;
+   DISPLAY('enter dataset name:') REPLY(DSN);
+   PUT SKIP LIST('you entered:', DSN);
+END PROMPTDEMO;

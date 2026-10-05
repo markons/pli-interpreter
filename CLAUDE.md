@@ -26,9 +26,15 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   offline); skip `dli.pli` — needs a real IRIS instance, see DL/I
   section below). Stdin fixtures: hello=`World` (GET LIST NAME),
   average=`3 1 2 3`, stage1=`1 2`, stage2=`X=1,Y=2;` +
-  `AAAABBBB  111.25`, javaext=`ROW=5 COL=5;`. stage9 needs
-  stage9sub.pli passed alongside it (separate compilation). Delete
-  `stage4_*.dat` afterwards.
+  `AAAABBBB  111.25`, javaext=`ROW=5 COL=5;`, support_prompt=any line
+  (DISPLAY/REPLY). stage9 needs stage9sub.pli passed alongside it
+  (separate compilation). Delete `stage4_*.dat` and
+  `pli/examples/support_tickets_demo.sqlite` afterwards.
+  `support_*.pli` are the REXX-style everyday-support-utility
+  showcase (grep/parse/tally/timestamp/prompt/SQL-lookup over
+  `support_joblog.txt` and the `TICKETS` sqlite connection in
+  `pli_dbc.json`) — all runnable offline, run from the repo root like
+  every other example.
   `pli/examples/include_fetch_demo/test_include_fetch.py` is a
   self-contained scripted test (builds its own sqlite fixture, runs
   itself, cleans up) — run standalone, not part of the plain-.pli sweep.

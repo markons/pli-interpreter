@@ -1,0 +1,23 @@
+/* REXX-style everyday support utility: fixed-column field extraction,
+   the SUBSTR-based equivalent of REXX's "PARSE VAR line 1 f1 10 f2". */
+PARSEDEMO: PROC OPTIONS(MAIN);
+   DCL LINE   CHAR(40) VARYING;
+   DCL JOBNM  CHAR(8)  VARYING;
+   DCL STATUS CHAR(6)  VARYING;
+   DCL DETAIL CHAR(20) VARYING;
+
+   /* cols 1-8 jobname, 10-15 status, 17.. detail -- a typical
+      fixed-format support log line */
+   LINE = 'JOB00124' || ' ' || 'ABEND ' || ' ' || 'S0C7 ABCPROC2';
+
+   JOBNM  = TRIM(SUBSTR(LINE, 1, 8));
+   STATUS = TRIM(SUBSTR(LINE, 10, 6));
+   DETAIL = TRIM(SUBSTR(LINE, 17));
+
+   PUT SKIP LIST('job   :', JOBNM);
+   PUT SKIP LIST('status:', STATUS);
+   PUT SKIP LIST('detail:', DETAIL);
+
+   IF STATUS = 'ABEND' THEN
+      PUT SKIP LIST(JOBNM, 'needs attention ->', DETAIL);
+END PARSEDEMO;

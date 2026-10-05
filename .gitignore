@@ -31,3 +31,10 @@ pli/examples/include_fetch_demo/include_fetch_demo.sqlite
 # editor/IDE-extension auto-backups seen on .pli files (not written by
 # anything in this project)
 .pli-snapshots/
+
+# ad-hoc Java-transpile/native-build output left in pli/examples by the
+# Java backend driver or the AI4PL/I extension's own build features --
+# generated per-run, not source (javart/PLI.java is the real runtime)
+pli/examples/*.exe
+pli/examples/*.obj
+pli/examples/*.java

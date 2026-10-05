@@ -1,0 +1,8 @@
+/* REXX-style everyday support utility: timestamp a message.
+   DATE/TIME are niladic builtins here -- called WITHOUT parentheses,
+   unlike REXX's DATE()/TIME() function-call syntax. */
+STAMPDEMO: PROC OPTIONS(MAIN);
+   DCL MSG CHAR(40) VARYING;
+   MSG = 'restart requested by support';
+   PUT SKIP LIST(DATE, TIME, '-', MSG);
+END STAMPDEMO;

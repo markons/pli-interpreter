@@ -10,6 +10,8 @@ SQLDEMO: PROC OPTIONS(MAIN);
    DCL DEPT    CHAR(4)  VARYING;
    DCL SAL     FIXED DEC(7,2);
    DCL (N, I)  FIXED bin(31);
+   %INCLUDE ZZZJ4VE;
+
 
    EXEC SQL INCLUDE SQLCA;
    EXEC SQL WHENEVER SQLERROR GOTO SQLFAIL;
@@ -21,8 +23,7 @@ SQLDEMO: PROC OPTIONS(MAIN);
      select count(*) into :n
      from abs.vvertrag; 
 
-   put skip data(n); 
-
+   put skip data(n);
    
 DONE:  
    PUT SKIP(2) LIST('done, final sqlcode =', SQLCODE);

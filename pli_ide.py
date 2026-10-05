@@ -626,13 +626,23 @@ class PLIIDE(tk.Tk):
             self.editor.see("insert")
             self.editor.focus_set()
 
+    def _ask_password_sync(self, prompt):
+        """Password dialog for callers already running on the GUI thread
+        (compile_program/run_program's pre-check) -- no cross-thread
+        queue needed here, unlike _ask_password (used by the worker
+        thread during Run)."""
+        from tkinter import simpledialog
+        return simpledialog.askstring(
+            "Database login", prompt, show="*", parent=self) or ""
+
     def compile_program(self, quiet=False):
         """Preprocess + parse.  Returns True when the program is clean."""
         self._clear_errors()
         source = self.editor.get("1.0", "end-1c")
         incdir = os.path.dirname(self.filename) if self.filename else "."
         try:
-            expanded = preprocess(source, incdir)
+            expanded = preprocess(source, incdir,
+                                  password_prompt=self._ask_password_sync)
             self.parser.parse(expanded)
         except (LexError, ParseError, PreprocError, PLIError) as e:
             msgs = getattr(e, "messages", None) or [str(e)]

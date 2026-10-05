@@ -49,8 +49,9 @@ def _tokenize(text):
 
 
 class Preprocessor:
-    def __init__(self, include_dir="."):
+    def __init__(self, include_dir=".", password_prompt=None):
         self.include_dir = include_dir
+        self.password_prompt = password_prompt
         self.vars = {}        # name -> (type, value)
         self.active = set()
         self._include_depth = 0
@@ -119,7 +120,8 @@ class Preprocessor:
         name = os.path.splitext(fname)[0].upper()
         from .include_fetch import fetch_and_cache, IncludeFetchError
         try:
-            return fetch_and_cache(name, cfg, full_config, config_dir)
+            return fetch_and_cache(name, cfg, full_config, config_dir,
+                                   password_prompt=self.password_prompt)
         except IncludeFetchError as e:
             raise PreprocError(
                 "%%INCLUDE %s: %s; source-repository fallback also "
@@ -706,8 +708,13 @@ class Preprocessor:
         raise PreprocError("bad token %r in preprocessor expression" % val)
 
 
-def preprocess(text, include_dir="."):
-    """Run the preprocessor if the source contains % statements."""
+def preprocess(text, include_dir=".", password_prompt=None):
+    """Run the preprocessor if the source contains % statements.
+
+    password_prompt, if given, is used for the %INCLUDE DB2 source-
+    repository fallback's CONNECT (e.g. an IDE-safe dialog callback
+    instead of the default console getpass -- see include_fetch.py).
+    """
     if not re.search(r"^\s*%", text, re.MULTILINE):
         return text
-    return Preprocessor(include_dir).process(text)
+    return Preprocessor(include_dir, password_prompt).process(text)

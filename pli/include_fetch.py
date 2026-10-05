@@ -5,14 +5,13 @@ raising immediately when the member isn't a local file.
 Configured via an optional "_source_repository" block in pli_dbc.json,
 alongside the normal connection entries:
 
-    { "AZDO0D1O": { "driver": "ibm_db", ... },
+    { "DTO1": { "driver": "ibm_db", ... },
       "_source_repository": {
-        "connection": "AZDO0D1O",
-        "table": "ABS.CCM_SOURCE_REPO",
+        "connection": "DTO1",
+        "table": "G##OSTC.VGCC37B1",
         "name_column": "CCMOBJT",
         "type_column": "CCMTYPT",
         "source_column": "QUELLE",
-        "newline_char": "",
         "cache_dir": ".pli_include_cache"
       } }
 
@@ -21,6 +20,13 @@ Kerberos/SSL/JDBC settings. A fetched member is cached to disk under
 cache_dir; once cached it is never re-fetched, and (since the cache
 file is now an ordinary local file) any %INCLUDE inside it recurses
 through preproc.py's normal local-file path with no new logic needed.
+
+"table" is optional: if omitted, _resolve_ccm_table() probes
+SYSIBM.SYSTABLES for whichever of _KNOWN_CCM_TABLES actually exists on
+this connection (mainframe host DB2 and Linux/MFES DB2 use different
+table names for the same CCM object store -- hardcoding one per
+connection is what caused real, hard-to-diagnose failures before this
+was added).
 
 Runs with no Interpreter/SqlRuntime in scope (preprocessing can happen
 standalone, e.g. from scripts/build.py), so this module owns its own
@@ -35,6 +41,34 @@ from .sql import connect_raw, SQLError
 
 class IncludeFetchError(Exception):
     pass
+
+
+# The CCM object-store table lives under a different name depending on the
+# DB2 environment: host DB2 (mainframe, e.g. adt0.muc.allianz) uses
+# G##OSTC.VGCC37B1; Linux/MFES DB2 uses ABS.TCCMOBJ. Hardcoding one per
+# connection profile is fragile (confirmed the hard way: this exact mix-up
+# cost real debugging time before landing on probing the catalog instead,
+# same fix ai4pli's db_extractor.py had already made for the same reason --
+# credentials/config are correct, only the table differs by platform).
+_KNOWN_CCM_TABLES = ["G##OSTC.VGCC37B1", "ABS.TCCMOBJ"]
+
+
+def _resolve_ccm_table(conn):
+    """Probe SYSIBM.SYSTABLES for whichever _KNOWN_CCM_TABLES candidate
+    actually exists on this connection. Only called when "table" isn't
+    set explicitly in _source_repository config."""
+    cursor = conn.cursor()
+    for qualified in _KNOWN_CCM_TABLES:
+        creator, name = qualified.split(".", 1)
+        cursor.execute(
+            "SELECT 1 FROM SYSIBM.SYSTABLES WHERE CREATOR = ? AND NAME = ?",
+            [creator, name])
+        if cursor.fetchone():
+            return qualified
+    raise IncludeFetchError(
+        "could not find a known CCM object-store table on this connection "
+        "(tried: %s); set \"table\" explicitly in _source_repository config"
+        % ", ".join(_KNOWN_CCM_TABLES))
 
 
 def _default_password_prompt(prompt):
@@ -99,18 +133,15 @@ def fetch_and_cache(name, cfg, full_dbc_config, config_dir,
         raise IncludeFetchError("_source_repository connection %r not "
                                 "in pli_dbc.json" % conn_name)
 
-    table = cfg.get("table")
     name_col = cfg.get("name_column", "CCMOBJT")
     type_col = cfg.get("type_column", "CCMTYPT")
     source_col = cfg.get("source_column", "QUELLE")
     newline_char = cfg.get("newline_char", "\x9f")
-    if not table:
-        raise IncludeFetchError("_source_repository config is missing "
-                                "\"table\"")
 
     try:
         conn, driver = connect_raw(full_dbc_config[conn_key], conn_key,
                                    config_dir, password_prompt)
+        table = cfg.get("table") or _resolve_ccm_table(conn)
         query = ("SELECT %s, %s, %s FROM %s WHERE %s = ?"
                  % (name_col, type_col, source_col, table, name_col))
         cur = conn.cursor()
@@ -119,6 +150,8 @@ def fetch_and_cache(name, cfg, full_dbc_config, config_dir,
     except SQLError as e:
         raise IncludeFetchError("source-repository connection failed: "
                                 "%s" % e)
+    except IncludeFetchError:
+        raise
     except Exception as e:
         raise IncludeFetchError("source-repository query failed: %s" % e)
 
