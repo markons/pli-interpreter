@@ -55,7 +55,7 @@ reserved = {
 }
 
 tokens = [
-    "ID", "NUMBER", "STRING", "BITSTRING", "EXECSQL",
+    "ID", "NUMBER", "ISUB", "STRING", "BITSTRING", "EXECSQL",
     "POW", "CONCAT", "NE", "LE", "GE", "EQ", "LT", "GT", "ARROW",
     "PLUS", "MINUS", "STAR", "SLASH", "AND", "OR", "NOT",
     "LPAREN", "RPAREN", "COMMA", "SEMI", "COLON", "DOT",
@@ -89,6 +89,15 @@ class PLILexer:
             t.value = body
         else:
             t.value = raw[1:-1].replace("''", "'")
+        return t
+
+    def t_ISUB(self, t):
+        r"\d+[Ss][Uu][Bb](?![A-Za-z0-9_$\#@])"
+        # iSUB dummy variable of DEFINED (iSUB defining): 1SUB, 2SUB, ...
+        t.value = int(t.value[:-3])
+        if t.value < 1:
+            raise LexError("line %d: iSUB must be 1SUB or higher"
+                           % t.lexer.lineno)
         return t
 
     def t_NUMBER(self, t):

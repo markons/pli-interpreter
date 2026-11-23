@@ -115,6 +115,17 @@ class BuiltinDecl:
         self.name = name
 
 
+class GenericDecl:
+    """DCL G GENERIC(E1 WHEN(desc,...), ..., En OTHERWISE); -- a call
+    G(args) is routed to the first member whose descriptor list matches
+    the arguments' attributes (count, type, BIN/DEC, CHAR/BIT, array
+    dimensionality).  members: [(entry_name, descs-or-None)], None =
+    OTHERWISE; each desc is (kind, attrs, ndims) from the parser."""
+    def __init__(self, name, members):
+        self.name = name
+        self.members = members
+
+
 class PLIStructure:
     """A structure: ordered members (Variable / PLIArray / PLIStructure)."""
     def __init__(self, name):
@@ -157,8 +168,9 @@ class PLIStructure:
 class Decl:
     """Resolved declaration attributes."""
     def __init__(self, base="FLOAT", length=None, varying=False, prec=None,
-                 pic=None):
+                 pic=None, radix=None):
         self.base = base          # FIXED | FLOAT | CHAR | BIT | LABEL | PIC
+        self.radix = radix        # "BIN" | "DEC" | None (= PL/I default)
         self.length = length      # for CHAR/BIT
         self.varying = varying
         self.prec = prec          # (p, q) for FIXED/FLOAT
@@ -167,7 +179,13 @@ class Decl:
     @staticmethod
     def default_for(name):
         # PL/I implicit rules: names starting I..N are FIXED BINARY
-        return Decl("FIXED") if name[0] in "IJKLMN" else Decl("FLOAT")
+        return (Decl("FIXED", radix="BIN") if name[0] in "IJKLMN"
+                else Decl("FLOAT", radix="DEC"))
+
+    def radix_of(self):
+        """BIN/DEC as PL/I defaults it: explicit, else DECIMAL (the
+        default for an explicit FIXED or FLOAT without BIN/DEC)."""
+        return self.radix or "DEC"
 
 
 class Variable:
@@ -427,6 +445,27 @@ class DefinedVar:
         self.decl = decl
         self.base_ref = base_ref  # AST ref of the base variable
         self.position = position  # 1-based POSITION, default 1
+        self.bounds = None        # [(lo,hi),...] when the defined item
+                                  # is itself an array (correspondence /
+                                  # iSUB defining)
+
+
+def _contains_isub(node):
+    """True if an AST subtree contains an iSUB dummy (1SUB, 2SUB...)."""
+    if isinstance(node, N.ISub):
+        return True
+    if isinstance(node, N.Node):
+        return any(_contains_isub(getattr(node, f)) for f in node._fields)
+    if isinstance(node, (list, tuple)):
+        return any(_contains_isub(x) for x in node)
+    return False
+
+
+def _is_dec_literal(node):
+    """A decimal constant (optionally signed): FIXED DECIMAL in PL/I."""
+    while isinstance(node, N.UnOp) and node.op in ("MINUS", "PLUS", "-", "+"):
+        node = node.operand
+    return isinstance(node, N.Num)
 
 
 class PLIFile:
@@ -730,6 +769,7 @@ class Interpreter:
         self.input_tokens = []   # pending GET LIST tokens
         self.parser = PLIParser()
         self.cond_frames = []    # ON-unit frames, one per proc/begin activation
+        self.isub_stack = []     # subscripts feeding 1SUB.. (iSUB defining)
         self.current_cond = None # last raised condition (ONCODE etc.)
         self.string_input = False  # GET STRING in progress
         self.copy_input = False    # GET ... COPY echo
@@ -1029,6 +1069,13 @@ class Interpreter:
                                % (item.lineno, name))
             env.declare(name, BuiltinDecl(name))
             return
+        if "GENERIC_ENTRY" in kinds:
+            members = next(v for k, v in item.attrs if k == "GENERIC_ENTRY")
+            if item.dims is not None:
+                raise PLIError("line %d: GENERIC name %s cannot have "
+                               "dimensions" % (item.lineno, name))
+            env.declare(name, GenericDecl(name, members))
+            return
         if "ENTRY" in kinds or "ENTRY_RETURNS" in kinds:
             existing = env.lookup(name)
             if isinstance(existing, Procedure):
@@ -1084,7 +1131,14 @@ class Interpreter:
             position = (int(to_number(self.eval(pos[1][0], env)))
                         if pos else 1)
             decl = self._resolve_attrs(name, item.attrs, env)
-            env.declare(name, DefinedVar(name, decl, base_ref, position))
+            dv = DefinedVar(name, decl, base_ref, position)
+            if item.dims is not None:
+                dv.bounds = [self._resolve_bound(b, env) for b in item.dims]
+            elif _contains_isub(base_ref):
+                raise PLIError("line %d: %s: iSUB defining needs a "
+                               "dimensioned defined variable"
+                               % (item.lineno, name))
+            env.declare(name, dv)
             return
         decl = self._resolve_attrs(name, item.attrs, env)
         init = next((val for kind, val in item.attrs if kind == "INIT"), None)
@@ -1322,6 +1376,7 @@ class Interpreter:
 
     def _resolve_attrs(self, name, attrs, env):
         base = None
+        radix = None
         length = None
         varying = False
         prec = None
@@ -1335,6 +1390,7 @@ class Interpreter:
                 prec = val or prec
             elif kind in ("BINKW", "DECKW"):
                 prec = val or prec
+                radix = "BIN" if kind == "BINKW" else "DEC"
                 if base is None:
                     base = "FIXED" if kind == "BINKW" else None
             elif kind == "CHARKW":
@@ -1374,12 +1430,14 @@ class Interpreter:
                     raise PLIError("unknown attribute %s" % gname)
             elif kind in ("INIT", "STATIC", "AUTOMATIC", "LIKE",
                           "BASED", "CONTROLLED", "DEFINED",
-                          "ENTRY", "ENTRY_RETURNS"):
+                          "ENTRY", "ENTRY_RETURNS", "GENERIC_ENTRY"):
                 pass
         if base is None:
-            base = (Decl.default_for(name).base if name
-                    else "FLOAT")
-        return Decl(base, length, varying, prec, pic)
+            implicit = Decl.default_for(name) if name else Decl("FLOAT")
+            base = implicit.base
+            if radix is None:
+                radix = implicit.radix
+        return Decl(base, length, varying, prec, pic, radix)
 
     def exec_Assign(self, stmt, env):
         target0 = stmt.target[0] if isinstance(stmt.target, list) \
@@ -1420,6 +1478,113 @@ class Interpreter:
             if isinstance(entry, Variable) and entry.decl.base == "ENTRY":
                 return entry.value
         return self.eval(node, env)
+
+    # -- GENERIC entry selection ---------------------------------------------
+
+    _TYPE_ATTRS = {"FIXED": "FIXED", "FLOAT": "FLOAT", "CHARKW": "CHAR",
+                   "BIT": "BIT", "PICTURE": "PIC", "LABEL": "LABEL",
+                   "FILE": "FILE", "ENTRY": "ENTRY",
+                   "ENTRY_RETURNS": "ENTRY"}
+    _GEN_TYPE_ATTRS = {"POINTER": "POINTER", "PTR": "POINTER",
+                       "COMPLEX": "COMPLEX", "EVENT": "EVENT",
+                       "AREA": "AREA", "OFFSET": "OFFSET",
+                       "TASK": "TASK"}
+
+    @staticmethod
+    def _arg_profile(cell):
+        """(type, radix, varying, ndims) describing one argument."""
+        ndims = None
+        if isinstance(cell, PLIStructure):
+            return ("STRUCTURE", None, False, None)
+        if isinstance(cell, PLIStructArray):
+            return ("STRUCTURE", None, False,
+                    len(getattr(cell, "bounds", [])) or None)
+        if isinstance(cell, PLIFile):
+            return ("FILE", None, False, None)
+        if isinstance(cell, PLIArray):
+            ndims = len(cell.bounds)
+            decl = cell.decl
+            sample = cell.data[0] if cell.data else None
+        else:
+            decl = getattr(cell, "decl", None)
+            sample = getattr(cell, "value", None)
+        base = decl.base if decl is not None else "FLOAT"
+        if isinstance(sample, complex) and base in ("FIXED", "FLOAT"):
+            base = "COMPLEX"
+        radix = decl.radix_of() if decl is not None and \
+            base in ("FIXED", "FLOAT", "COMPLEX") else None
+        varying = bool(decl.varying) if decl is not None else False
+        return (base, radix, varying, ndims)
+
+    def _desc_matches(self, desc, prof):
+        kind, attrs, dndims = desc
+        if kind == "ANY":
+            return True
+        atype, aradix, avarying, andims = prof
+        if dndims != andims:
+            return False
+        want_type = want_radix = None
+        want_varying = False
+        for k, v in attrs:
+            if k in self._TYPE_ATTRS:
+                want_type = self._TYPE_ATTRS[k]
+            elif k == "GENERIC" and v[0] in self._GEN_TYPE_ATTRS:
+                want_type = self._GEN_TYPE_ATTRS[v[0]]
+            elif k in ("BINKW", "DECKW"):
+                want_radix = "BIN" if k == "BINKW" else "DEC"
+            elif k == "VARYING":
+                want_varying = True
+        if want_type is None and want_radix is not None:
+            want_type = "FIXED"     # BIN / DEC alone imply FIXED
+        if want_type is None:
+            return True             # no type attribute: matches any type
+        if want_type == "COMPLEX":
+            # COMPLEX [FIXED|FLOAT]: the base type is not tracked
+            # separately for complex values
+            return atype == "COMPLEX"
+        if want_type != atype:
+            return False
+        if want_radix is not None and aradix is not None \
+                and want_radix != aradix:
+            return False
+        if want_varying and not avarying:
+            return False
+        return True
+
+    def _select_generic(self, gen, cells, env, lineno):
+        profiles = [self._arg_profile(c) for c in cells]
+        chosen = None
+        otherwise = None
+        for ename, descs in gen.members:
+            if descs is None:                 # OTHERWISE
+                if otherwise is None:
+                    otherwise = ename
+                continue
+            if descs == [("DESC", [], None)] and not cells:
+                descs = []                    # WHEN() = no arguments
+            if len(descs) != len(cells):
+                continue
+            if all(self._desc_matches(d, pr)
+                   for d, pr in zip(descs, profiles)):
+                chosen = ename
+                break
+        if chosen is None:
+            chosen = otherwise
+        if chosen is None:
+            shown = ", ".join(
+                ("%s%s%s" % ("(%d-dim) " % pr[3] if pr[3] else "",
+                             pr[0], " " + pr[1] if pr[1] else ""))
+                for pr in profiles) or "no arguments"
+            raise PLIError("line %d: no member of GENERIC %s matches the "
+                           "arguments (%s)" % (lineno, gen.name, shown))
+        proc = self._resolve_entry(env.lookup(chosen), chosen, lineno)
+        if isinstance(proc, GenericDecl):
+            raise PLIError("line %d: GENERIC %s: member %s is itself "
+                           "GENERIC" % (lineno, gen.name, chosen))
+        if not isinstance(proc, Procedure):
+            raise PLIError("line %d: GENERIC %s: member %s is not a "
+                           "procedure" % (lineno, gen.name, chosen))
+        return proc
 
     def _resolve_entry(self, entry, ctx_name, lineno):
         """Unwrap an ENTRY-typed Variable to the Procedure it holds."""
@@ -1559,7 +1724,7 @@ class Interpreter:
                 raise PLIError("%s is not allocated" % entry.name)
             return self._assign_entry(entry.stack[-1], args, value, ref, env)
         if isinstance(entry, DefinedVar):
-            return self._defined_write(entry, value, env)
+            return self._defined_write(entry, value, env, args)
         if isinstance(entry, PLIArray):
             if args is None:
                 self._assign_array(entry, value)
@@ -1686,10 +1851,15 @@ class Interpreter:
             return self._exec_plitdli(stmt, env)
         entry = self._resolve_entry(env.lookup(stmt.name), stmt.name,
                                     stmt.lineno)
+        cells = None
+        if isinstance(entry, GenericDecl):
+            cells = [self._arg_cell(a, env) for a in stmt.args]
+            entry = self._select_generic(entry, cells, env, stmt.lineno)
         if not isinstance(entry, Procedure):
             raise PLIError("line %d: %s is not a procedure"
                            % (stmt.lineno, stmt.name))
-        cells = [self._arg_cell(a, env) for a in stmt.args]
+        if cells is None:
+            cells = [self._arg_cell(a, env) for a in stmt.args]
         opts = dict((k.upper(), v) for k, v in (stmt.opts or []))
         if "EVENT" in opts or "TASK" in opts:
             event = None
@@ -1710,6 +1880,7 @@ class Interpreter:
         sub = Interpreter.__new__(Interpreter)
         sub.__dict__.update(self.__dict__)
         sub.cond_frames = []
+        sub.isub_stack = []
         sub.current_cond = None
         sub.column = 0
         sub.tasks = []
@@ -1806,11 +1977,15 @@ class Interpreter:
                 return entry                     # by reference
         value = self.eval(arg, env)
         if isinstance(value, FixedDec):
-            decl = Decl("FIXED", prec=(value.p, value.q))
+            decl = Decl("FIXED", prec=(value.p, value.q), radix="DEC")
         elif isinstance(value, (float, complex)):
-            decl = Decl("FLOAT")
+            decl = Decl("FLOAT", radix="DEC" if _is_dec_literal(arg)
+                        else None)
         elif isinstance(value, int):
-            decl = Decl("FIXED")
+            # a decimal constant is FIXED DECIMAL; an integer computed
+            # from FIXED BINARY operands stays BINARY
+            decl = Decl("FIXED", radix="DEC" if _is_dec_literal(arg)
+                        else "BIN")
         elif isinstance(value, BitStr):
             decl = Decl("BIT", len(value))
         elif isinstance(value, str):
@@ -1886,6 +2061,20 @@ class Interpreter:
     def _run_spec(self, spec, var, body, env, label):
         start = self.eval(spec.start, env)
         var.value = convert(start, var.decl)
+        if spec.repeat is not None:
+            # DO v = start REPEAT expr [WHILE(...)] [UNTIL(...)]: after each
+            # pass v takes the value of expr (re-evaluated every time)
+            while True:
+                for kw, expr in spec.conds:
+                    if kw == "WHILE" and not is_true(self.eval(expr, env)):
+                        return None
+                if self._loop_body(body, env, label) == "leave":
+                    return "leave"
+                for kw, expr in spec.conds:
+                    if kw == "UNTIL" and is_true(self.eval(expr, env)):
+                        return None
+                var.value = self._convert(self.eval(spec.repeat, env),
+                                          var.decl, env)
         if spec.to is None and spec.by is None and not spec.conds:
             # single-value spec: execute once
             return self._loop_body(body, env, label)
@@ -2209,7 +2398,12 @@ class Interpreter:
     def _put_edit(self, items, formats, env):
         formats = self._expand_formats(formats, env)
         fi = 0
+        values = []
         for item in items:
+            v = self.eval(item, env)
+            # a whole array is a list of data items, one format each
+            values.extend(v.data if isinstance(v, PLIArray) else [v])
+        for value in values:
             # consume control formats (X, COL, SKIP) before each data item
             while True:
                 f = formats[fi % len(formats)]
@@ -2226,7 +2420,6 @@ class Interpreter:
                 else:
                     break
                 fi += 1
-            value = self.eval(item, env)
             self._write(self._format_value(value, name, args))
             fi += 1
 
@@ -2498,6 +2691,14 @@ class Interpreter:
             return LabelValue(entry.name)
         if isinstance(entry, BuiltinDecl):
             return self.call_builtin(node, env)
+        if isinstance(entry, GenericDecl):
+            cells = [self._arg_cell(a, env) for a in (node.args or [])]
+            proc = self._select_generic(entry, cells, env, node.lineno)
+            result = self.call_procedure(proc, cells)
+            if result is None:
+                raise PLIError("procedure %s (generic %s) returned no "
+                               "value" % (proc.name, node.name))
+            return result
         if entry is None:
             entry = self._search_member(node.name, env)
         if entry is None:
@@ -2518,7 +2719,7 @@ class Interpreter:
                 raise PLIError("%s is not allocated" % entry.name)
             return self._eval_entry(entry.stack[-1], node, env)
         if isinstance(entry, DefinedVar):
-            return self._defined_read(entry, env)
+            return self._defined_read(entry, env, node.args)
         if isinstance(entry, Variable):
             if entry.decl.base == "ENTRY" and node.args is not None:
                 proc = self._resolve_entry(entry, node.name, node.lineno)
@@ -2583,7 +2784,73 @@ class Interpreter:
                            % (dv.name, dv.base_ref.name))
         return entry
 
-    def _defined_read(self, dv, env):
+    # -- array DEFINED: correspondence and iSUB defining --------------------
+
+    def _defined_index_tuples(self, dv):
+        import itertools
+        return itertools.product(*[range(lo, hi + 1)
+                                   for lo, hi in dv.bounds])
+
+    def _defined_elem(self, dv, subs, env):
+        """Map a subscript list of the defined array onto (base array,
+        base subscripts).  With iSUB in the base reference, each iSUB
+        takes the value of the i-th subscript; with no base subscripts
+        it is simple (correspondence) defining: same subscripts."""
+        if len(subs) != len(dv.bounds):
+            raise PLIError("%s: wrong number of subscripts (%d for %d)"
+                           % (dv.name, len(subs), len(dv.bounds)))
+        ints = []
+        for (lo, hi), sv in zip(dv.bounds, subs):
+            i = int(to_number(sv))
+            if i < lo or i > hi:
+                raise PLICondition("SUBSCRIPTRANGE",
+                                   "subscript %d out of range %d:%d"
+                                   % (i, lo, hi))
+            ints.append(i)
+        base = self._defined_base(dv, env)
+        if not isinstance(base, PLIArray):
+            raise PLIError("DEFINED %s: base %s is not an array"
+                           % (dv.name, dv.base_ref.name))
+        if dv.base_ref.args is None:
+            return base, ints
+        self.isub_stack.append(ints)
+        try:
+            bsubs = [self.eval(a, env) for a in dv.base_ref.args]
+        finally:
+            self.isub_stack.pop()
+        return base, bsubs
+
+    def eval_ISub(self, node, env):
+        if not self.isub_stack:
+            raise PLIError("line %d: %dSUB is only valid in the base "
+                           "reference of a DEFINED attribute"
+                           % (node.lineno, node.n))
+        subs = self.isub_stack[-1]
+        if node.n > len(subs):
+            raise PLIError("line %d: %dSUB exceeds the %d dimension(s) of "
+                           "the defined array" % (node.lineno, node.n,
+                                                   len(subs)))
+        return subs[node.n - 1]
+
+    def _defined_read(self, dv, env, args=None):
+        if dv.bounds is not None:
+            if args is not None:
+                if "*" in args:
+                    raise PLIError("%s: cross-sections of a DEFINED array "
+                                   "are not supported" % dv.name)
+                subs = [self.eval(a, env) for a in args]
+                base, bsubs = self._defined_elem(dv, subs, env)
+                return convert(base.get(bsubs), dv.decl)
+            out = PLIArray(dv.bounds, dv.decl)      # whole-array (copy)
+            out.data = [convert(b.get(bs), dv.decl) for b, bs in
+                        (self._defined_elem(dv, list(t), env)
+                         for t in self._defined_index_tuples(dv))]
+            return out
+        if args is not None and dv.base_ref.args is None:
+            raise PLIError("%s is not an array" % dv.name)
+        if dv.base_ref.args is not None:
+            # scalar defined on one base element: DCL X DEF A(3);
+            return convert(self.eval(dv.base_ref, env), dv.decl)
         base = self._defined_base(dv, env)
         if isinstance(base, Variable):
             if dv.decl.base in ("CHAR", "BIT") and \
@@ -2598,7 +2865,32 @@ class Interpreter:
             return base
         raise PLIError("DEFINED %s: unsupported base" % dv.name)
 
-    def _defined_write(self, dv, value, env):
+    def _defined_write(self, dv, value, env, args=None):
+        if dv.bounds is not None:
+            if args is not None:
+                if "*" in args:
+                    raise PLIError("%s: cross-sections of a DEFINED array "
+                                   "are not supported" % dv.name)
+                subs = [self.eval(a, env) for a in args]
+                base, bsubs = self._defined_elem(dv, subs, env)
+                base.set(bsubs, convert(value, dv.decl))
+                return
+            tuples = list(self._defined_index_tuples(dv))
+            if isinstance(value, PLIArray):
+                if len(value.data) != len(tuples):
+                    raise PLIError("array assignment: extent mismatch")
+                vals = value.data
+            else:
+                vals = [value] * len(tuples)
+            for t, v in zip(tuples, vals):
+                base, bsubs = self._defined_elem(dv, list(t), env)
+                base.set(bsubs, convert(v, dv.decl))
+            return
+        if args is not None:
+            raise PLIError("%s is not an array" % dv.name)
+        if dv.base_ref.args is not None:
+            self.assign_target(dv.base_ref, convert(value, dv.decl), env)
+            return
         base = self._defined_base(dv, env)
         if isinstance(base, Variable):
             if dv.decl.base in ("CHAR", "BIT") and \

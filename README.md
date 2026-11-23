@@ -133,7 +133,7 @@ from pli import run_source, run_file
 run_source("H: PROC OPTIONS(MAIN); PUT LIST('HI'); END H;")
 ```
 
-Example programs live in `pli/examples/` — `stage1.pli` … `stage10.pli`
+Example programs live in `pli/examples/` — `stage1.pli` … `stage11.pli`
 exercise the F-level-and-beyond features; the rest are basics. Try
 `hello.pli` first, then `fibfact.pli` (recursion) or `sort.pli`
 (arrays, by-reference CALL).
@@ -271,13 +271,52 @@ RETURNS(FIXED); F = SOMEPROC; Y = F(5);` — assignment captures the
 entry rather than calling it, `F(args)`/`CALL F(args)` calls through
 it. (Passing a bare procedure name as an argument to an ENTRY-typed
 *parameter* is not yet supported — assign it to an ENTRY variable
-first.) `GENERIC` entry selection is not implemented. **`AREA`** /
+first.) `GENERIC` entry selection: see below. **`AREA`** /
 **`OFFSET`** / **`EMPTY`**: `DCL A AREA(1000); DCL O OFFSET(A);
 ALLOCATE recvar IN(A) SET(p);` — a logical allocation pool (this
 interpreter has no byte-addressable storage, so AREA capacity/`AREA`
 condition is leaf-count based, not byte-exact); `OFFSET` behaves as a
 POINTER tied to an area; `EMPTY` is OFFSET's null, usable bare like
 `NULL`.
+
+**GENERIC, DO REPEAT, iSUB defining** — see
+`pli/examples/stage11.pli` (scripted test:
+`python pli/examples/test_stage11.py`).
+
+- `GENERIC` entry selection: `DCL SHOW GENERIC(SHOW_BIN WHEN(FIXED BIN),
+  SHOW_STR WHEN(CHAR), SHOW_VEC WHEN((*) FIXED), SHOW_TWO WHEN(*, *),
+  SHOW_ANY OTHERWISE);` — `CALL SHOW(x)` / `y = SHOW(x)` calls the first
+  member whose descriptor list matches the arguments; `OTHERWISE` is
+  used only when no `WHEN` member matches. The PL/I(F) spelling
+  `member ENTRY(descriptors)` is accepted too. Matching considers
+  argument count, base type (FIXED/FLOAT/CHAR/BIT/PICTURE/POINTER/
+  COMPLEX/...), BINARY vs DECIMAL, `VARYING`, and array rank (`(*)`,
+  `(*,*)`); `*` matches anything, a descriptor with no type attribute
+  matches any type. A decimal constant (`42`, `1.5`) is FIXED/FLOAT
+  DECIMAL, as in PL/I, so it will *not* select a `WHEN(FIXED BIN)`
+  member. Precision and lengths are *not* compared (deviation:
+  `FIXED BIN(15)` and `FIXED BIN(31)` descriptors are indistinguishable),
+  and structures match only `*` or an empty descriptor. No match ⇒ a
+  clear error naming the argument attributes.
+- `DO v = start REPEAT expr [WHILE(c)] [UNTIL(c)];` — after every pass
+  `v` takes the (re-evaluated) value of `expr`; WHILE is tested before
+  each pass, UNTIL after. Cannot be combined with TO/BY (compile
+  error). Typical use: walking a list,
+  `DO Q = HEAD REPEAT Q->NEXT WHILE(Q ^= NULL);`. `REPEAT(s,n)` the
+  builtin still works — `REPEAT` is not a reserved word.
+- iSUB defining: `DCL DIAG(3) DEFINED A(1SUB,1SUB);`,
+  `DCL TR(3,3) DEFINED A(2SUB,1SUB);` (transpose), `DCL ROW2(3)
+  DEFINED A(2,1SUB);` — element `D(i,j,...)` maps to the base element
+  whose subscripts are computed with `kSUB` = the k-th subscript of `D`.
+  Without base subscripts, a dimensioned `DEFINED A` is simple
+  (correspondence) defining: same subscripts. Reads and writes go
+  through to the base array (element-wise, whole-array `D = 0;` and
+  `D = otherarray;` too); a whole-array read (`PUT LIST(D)`) yields a
+  copy. Not supported: cross-sections (`D(*,1)`) of a DEFINED array,
+  iSUB on BASED/CONTROLLED bases. `DCL X DEFINED A(3);` (a scalar on one
+  base element) also works now.
+- `PUT EDIT` now accepts whole arrays as data items (one format item
+  per element), e.g. `PUT EDIT(V) ((3) F(5));`.
 
 **Separate compilation** — `python -m pli main.pli sub1.pli ...`
 treats each file as a separately compiled external procedure; the one
@@ -514,8 +553,9 @@ declared variable) for the rest of that scope.
 - BASED/pointer storage uses object references, not byte-addressable
   storage; `P->X` reinterprets the pointed-to object, not raw bytes.
 - Integer/integer division is not scale-preserving (see above).
-- iSUB defining, `DO REPEAT`, REGIONAL(2)/REGIONAL(3), `GENERIC` entry
-  selection, and `%GOTO` backward jumps are not implemented.
+- REGIONAL(2)/REGIONAL(3) and `%GOTO` backward jumps are not
+  implemented. `GENERIC` selection ignores precision/length (see
+  above).
 - ON-unit resumption is at statement granularity; PUT LIST tab stops
   are fixed at 24 columns.
 

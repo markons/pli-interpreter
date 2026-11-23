@@ -38,6 +38,7 @@ Member = _mk("Member", "base", "name", "args")   # qualified ref: base.NAME(args
 PtrRef = _mk("PtrRef", "base", "name", "args")   # pointer-qualified: P->X(args)
 BinOp = _mk("BinOp", "op", "left", "right")
 UnOp = _mk("UnOp", "op", "operand")
+ISub = _mk("ISub", "n")                   # 1SUB, 2SUB ... in a DEFINED base
 
 # ---- statements ------------------------------------------------------
 Labeled = _mk("Labeled", "name", "stmt")
@@ -48,7 +49,8 @@ If = _mk("If", "cond", "then", "els")               # els may be None
 Block = _mk("Block", "body")                        # plain DO; ... END;
 DoWhile = _mk("DoWhile", "conds", "body")           # conds: [(kw, expr), ...]
 DoIter = _mk("DoIter", "var", "specs", "body")      # specs: [DoSpec, ...]
-DoSpec = _mk("DoSpec", "start", "to", "by", "conds")
+DoSpec = _mk("DoSpec", "start", "to", "by", "conds", "repeat")
+                                                    # repeat: expr or None
 Select = _mk("Select", "subject", "whens", "otherwise")  # whens: [(exprs, stmt)]
 Declare = _mk("Declare", "items")                   # items: [DeclItem, ...]
 DeclItem = _mk("DeclItem", "names", "dims", "attrs", "level")  # level None = scalar

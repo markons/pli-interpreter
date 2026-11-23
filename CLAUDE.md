@@ -27,7 +27,9 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   section below). Stdin fixtures: hello=`World` (GET LIST NAME),
   average=`3 1 2 3`, stage1=`1 2`, stage2=`X=1,Y=2;` +
   `AAAABBBB  111.25`, javaext=`ROW=5 COL=5;`, support_prompt=any line
-  (DISPLAY/REPLY). stage9 needs stage9sub.pli passed alongside it
+  (DISPLAY/REPLY), stage7=a name line + a number line (REPLY then
+  GET LIST); skip simple_sql_select.pli (needs a real Db2, DTO1).
+  stage9 needs stage9sub.pli passed alongside it
   (separate compilation). Delete `stage4_*.dat` and
   `pli/examples/support_tickets_demo.sqlite` afterwards.
   `support_*.pli` are the REXX-style everyday-support-utility
@@ -35,6 +37,8 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   `support_joblog.txt` and the `TICKETS` sqlite connection in
   `pli_dbc.json`) — all runnable offline, run from the repo root like
   every other example.
+  `pli/examples/test_stage11.py` (GENERIC/DO REPEAT/iSUB: exact
+  stage11.pli output + error paths) - run standalone too.
   `pli/examples/include_fetch_demo/test_include_fetch.py` is a
   self-contained scripted test (builds its own sqlite fixture, runs
   itself, cleans up) — run standalone, not part of the plain-.pli sweep.
@@ -113,6 +117,28 @@ SQL support and newer fixes; do not edit it (deletion pending owner's OK).
   BUILTIN;`). The Java backend (`javagen.py`) already raised a clear
   `CodegenError` for the `BUILTIN` attribute (its generic
   unsupported-attribute path) — left as-is, no gap there.
+- GENERIC / DO REPEAT / iSUB defining (2026-11-23, NOT committed -
+  awaiting owner test): GENERIC is NOT a keyword - grammar rule
+  `attr : ID LPAREN generic_list RPAREN` (action checks the ID is
+  GENERIC); items `name WHEN(descs)` | `name ENTRY(descs)` (F-level) |
+  `name OTHERWISE`; desc = attr_seq | `*` | `(bounds) attr_seq`.
+  Attr kind "GENERIC_ENTRY" -> `GenericDecl` marker (like BuiltinDecl);
+  `_select_generic` matches on the evaluated `_arg_cell` cells (type,
+  radix, VARYING, rank; precision/length ignored), dispatched in
+  exec_CallStmt and eval_Ref; OTHERWISE only if no WHEN matches.
+  Decl gained `radix` ("BIN"/"DEC"/None; `radix_of()` defaults DEC;
+  implicit I-N = BIN); `_arg_cell` marks a numeric literal DEC, a
+  computed int BIN. REPEAT is NOT a keyword either (also the REPEAT
+  builtin): `do_ctl : ID expr` with an ID==REPEAT check; DoSpec gained
+  a 5th field `repeat` (javagen rejects it). iSUB: lexer token ISUB
+  (`\d+SUB`, defined before t_NUMBER), node ISub(n); DefinedVar gained
+  `bounds`; `_defined_elem` pushes the subscripts on
+  `interp.isub_stack` and evaluates the base_ref args (eval_ISub reads
+  the top). `_defined_read/_write` now take args - before this,
+  subscripts on a DEFINED name were silently IGNORED (returned the
+  whole base). Bundled: PUT EDIT flattens whole-array data items.
+  Example stage11.pli + test_stage11.py; full example regression
+  byte-identical to HEAD (except the new example + a wall-clock stamp).
 - v0.9.0 additions: %INCLUDE DB2 source-repository fallback (ai4pli/
   pli-tools-vscode's "recursive include resolver" concept, ported
   narrowly — this preprocessor is already a real recursive-descent

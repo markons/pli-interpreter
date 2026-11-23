@@ -354,16 +354,21 @@ class PLIParser:
 
     def p_do_spec(self, p):
         "do_spec : expr do_ctl_list"
-        to = by = None
+        to = by = repeat = None
         conds = []
         for kind, val in p[2]:
             if kind == "TO":
                 to = val
             elif kind == "BY":
                 by = val
+            elif kind == "REPEAT":
+                repeat = val
             else:
                 conds.append((kind, val))
-        p[0] = N.DoSpec(p[1], to, by, conds)
+        if repeat is not None and (to is not None or by is not None):
+            self._err("line %d: REPEAT cannot be combined with TO/BY"
+                      % (getattr(p[1], "lineno", 0) or p.lineno(1)))
+        p[0] = N.DoSpec(p[1], to, by, conds, repeat)
 
     def p_do_ctl_list(self, p):
         """do_ctl_list : do_ctl_list do_ctl
@@ -379,6 +384,15 @@ class PLIParser:
             p[0] = (p[1].upper(), p[2])
         else:
             p[0] = (p[1].upper(), p[3])
+
+    def p_do_ctl_repeat(self, p):
+        "do_ctl : ID expr"
+        # REPEAT is not reserved (it is also the REPEAT(s,n) builtin);
+        # an identifier directly after a DO spec expression can only be it
+        if p[1] != "REPEAT":
+            self._err("line %d: expected TO, BY, REPEAT, WHILE or UNTIL, "
+                      "found %r" % (p.lineno(1), p[1]))
+        p[0] = ("REPEAT", p[2])
 
     # ---- SELECT ---------------------------------------------------------
 
@@ -556,6 +570,46 @@ class PLIParser:
             self._err("line %d: unknown attribute %r in DECLARE"
                       % (p.lineno(1), p[1]))
         p[0] = ("GENERIC", (p[1], p[3] if len(p) == 5 else None))
+
+    def p_attr_generic_entry(self, p):
+        "attr : ID LPAREN generic_list RPAREN"
+        # DCL G GENERIC(E1 WHEN(FIXED), E2 WHEN(FLOAT), E3 OTHERWISE)
+        # (PL/I(F) spelling E1 ENTRY(FIXED) is accepted too)
+        if p[1] != "GENERIC":
+            self._err("line %d: %r(...) member list is only valid for "
+                      "GENERIC" % (p.lineno(1), p[1]))
+        p[0] = ("GENERIC_ENTRY", p[3])
+
+    def p_generic_list(self, p):
+        """generic_list : generic_list COMMA generic_item
+                        | generic_item"""
+        p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
+
+    def p_generic_item(self, p):
+        """generic_item : ID WHEN LPAREN gen_desc_list RPAREN
+                        | ID ENTRYKW LPAREN gen_desc_list RPAREN
+                        | ID OTHERWISE"""
+        if len(p) == 3:
+            p[0] = (p[1], None)              # None = OTHERWISE
+        else:
+            p[0] = (p[1], p[4])
+
+    def p_gen_desc_list(self, p):
+        """gen_desc_list : gen_desc_list COMMA gen_desc
+                         | gen_desc"""
+        p[0] = (p[1] + [p[3]]) if len(p) == 4 else [p[1]]
+
+    def p_gen_desc(self, p):
+        """gen_desc : attr_seq
+                    | STAR
+                    | LPAREN bound_list RPAREN attr_seq"""
+        # (kind, attrs, ndims): ndims None = scalar, n = n-dim array
+        if len(p) == 2 and p[1] == "*":
+            p[0] = ("ANY", [], None)
+        elif len(p) == 2:
+            p[0] = ("DESC", p[1], None)
+        else:
+            p[0] = ("DESC", p[4], len(p[2]))
 
     def p_attr_file(self, p):
         "attr : FILE"
@@ -912,6 +966,10 @@ class PLIParser:
     def p_expr_group(self, p):
         "expr : LPAREN expr RPAREN"
         p[0] = p[2]
+
+    def p_expr_isub(self, p):
+        "expr : ISUB"
+        p[0] = N.ISub(p[1], lineno=p.lineno(1))
 
     def p_expr_number(self, p):
         "expr : NUMBER"

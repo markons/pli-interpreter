@@ -751,6 +751,9 @@ class JavaCodeGen:
                                "not supported by the Java backend"
                                % stmt.lineno)
         spec = stmt.specs[0]
+        if getattr(spec, "repeat", None) is not None:
+            raise CodegenError("line %d: DO ... REPEAT is not supported by "
+                               "the Java backend" % stmt.lineno)
         if spec.conds:
             raise CodegenError("line %d: DO ... TO ... WHILE/UNTIL is not "
                                "supported by the Java backend" % stmt.lineno)
